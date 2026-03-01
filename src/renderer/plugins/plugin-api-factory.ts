@@ -643,6 +643,41 @@ function createAgentsAPI(ctx: PluginContext, manifest?: PluginManifest): AgentsA
       const unsub = useAgentStore.subscribe(callback);
       return { dispose: unsub };
     },
+
+    async listSessions(agentId: string) {
+      const projectPath = ctx.projectPath;
+      if (!projectPath) return [];
+      const agent = useAgentStore.getState().agents[agentId];
+      try {
+        return await window.clubhouse.agent.listSessions(projectPath, agentId, agent?.orchestrator);
+      } catch {
+        return [];
+      }
+    },
+
+    async readSessionTranscript(agentId: string, sessionId: string, offset: number, limit: number) {
+      const projectPath = ctx.projectPath;
+      if (!projectPath) return null;
+      const agent = useAgentStore.getState().agents[agentId];
+      try {
+        const result = await window.clubhouse.agent.readSessionTranscript(projectPath, agentId, sessionId, offset, limit, agent?.orchestrator);
+        // Cast the IPC result to the typed SessionTranscriptPage (event types are normalized on the main process side)
+        return result as import('../../shared/session-types').SessionTranscriptPage | null;
+      } catch {
+        return null;
+      }
+    },
+
+    async getSessionSummary(agentId: string, sessionId: string) {
+      const projectPath = ctx.projectPath;
+      if (!projectPath) return null;
+      const agent = useAgentStore.getState().agents[agentId];
+      try {
+        return await window.clubhouse.agent.getSessionSummary(projectPath, agentId, sessionId, agent?.orchestrator);
+      } catch {
+        return null;
+      }
+    },
   };
 }
 
