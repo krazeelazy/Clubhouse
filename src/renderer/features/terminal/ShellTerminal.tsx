@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { useThemeStore } from '../../stores/themeStore';
 import { useClipboardSettingsStore } from '../../stores/clipboardSettingsStore';
 import { attachClipboardHandlers } from './clipboard';
+import { attachNewlineHandler } from './newline-handler';
 
 interface Props {
   sessionId: string;
@@ -55,6 +56,8 @@ export function ShellTerminal({ sessionId, focused }: Props) {
     const inputDisposable = term.onData((data) => {
       window.clubhouse.pty.write(sessionId, data);
     });
+
+    attachNewlineHandler(term, (data) => window.clubhouse.pty.write(sessionId, data));
 
     // Batch PTY data writes using rAF to avoid 100+ DOM renders/sec.
     // Data arriving between frames is concatenated and flushed once per paint.

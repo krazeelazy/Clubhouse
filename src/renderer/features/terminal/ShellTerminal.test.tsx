@@ -8,6 +8,7 @@ const g = globalThis as any;
 g.__testTerminal = null;
 g.__testFitAddon = null;
 g.__testAttachClipboard = vi.fn().mockReturnValue(vi.fn());
+g.__testAttachNewline = vi.fn();
 
 vi.mock('@xterm/xterm', () => {
   class Terminal {
@@ -17,6 +18,7 @@ vi.mock('@xterm/xterm', () => {
     focus = vi.fn();
     dispose = vi.fn();
     onData = vi.fn().mockReturnValue({ dispose: vi.fn() });
+    attachCustomKeyEventHandler = vi.fn();
     options: Record<string, any> = {};
     cols = 80;
     rows = 24;
@@ -42,6 +44,10 @@ vi.mock('./clipboard', () => ({
   attachClipboardHandlers: (...args: any[]) => (globalThis as any).__testAttachClipboard(...args),
 }));
 
+vi.mock('./newline-handler', () => ({
+  attachNewlineHandler: (...args: any[]) => (globalThis as any).__testAttachNewline(...args),
+}));
+
 import { ShellTerminal } from './ShellTerminal';
 
 let mockOnDataCallback: ((id: string, data: string) => void) | null = null;
@@ -56,6 +62,7 @@ describe('ShellTerminal', () => {
     g.__testFitAddon = null;
     g.__testAttachClipboard.mockClear();
     g.__testAttachClipboard.mockReturnValue(vi.fn());
+    g.__testAttachNewline.mockClear();
     mockOnDataCallback = null;
     mockOnExitCallback = null;
     mockRemoveDataListener.mockClear();
@@ -266,6 +273,13 @@ describe('ShellTerminal', () => {
       useClipboardSettingsStore.setState({ clipboardCompat: false });
       render(<ShellTerminal sessionId="shell-1" />);
       expect(g.__testAttachClipboard).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('newline handler', () => {
+    it('attaches newline handler on mount', () => {
+      render(<ShellTerminal sessionId="shell-1" />);
+      expect(g.__testAttachNewline).toHaveBeenCalled();
     });
   });
 
