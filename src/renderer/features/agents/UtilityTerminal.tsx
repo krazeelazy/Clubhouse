@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useThemeStore } from '../../stores/themeStore';
+import { attachNewlineHandler } from '../terminal/newline-handler';
 
 interface Props {
   agentId: string;
@@ -49,6 +50,8 @@ export function UtilityTerminal({ agentId, worktreePath }: Props) {
     const inputDisposable = term.onData((data) => {
       window.clubhouse.pty.write(ptyId, data);
     });
+
+    attachNewlineHandler(term, containerRef.current, (data) => window.clubhouse.pty.write(ptyId, data));
 
     const removeDataListener = window.clubhouse.pty.onData(
       (id: string, data: string) => {

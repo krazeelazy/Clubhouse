@@ -9,6 +9,7 @@ const g = globalThis as any;
 g.__testTerminal = null;
 g.__testFitAddon = null;
 g.__testAttachClipboard = vi.fn().mockReturnValue(vi.fn());
+g.__testAttachNewline = vi.fn().mockReturnValue(vi.fn());
 
 vi.mock('@xterm/xterm', () => {
   class Terminal {
@@ -41,6 +42,10 @@ vi.mock('@xterm/addon-fit', () => {
 
 vi.mock('../terminal/clipboard', () => ({
   attachClipboardHandlers: (...args: any[]) => (globalThis as any).__testAttachClipboard(...args),
+}));
+
+vi.mock('../terminal/newline-handler', () => ({
+  attachNewlineHandler: (...args: any[]) => (globalThis as any).__testAttachNewline(...args),
 }));
 
 import { AgentTerminal } from './AgentTerminal';

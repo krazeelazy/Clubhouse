@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { UsageEvent } from '../../../../shared/structured-events';
 import { CostTracker } from './CostTracker';
 
@@ -16,6 +16,15 @@ interface Props {
  */
 export function ActionBar({ agentId: _agentId, elapsed, usage, isComplete, onStop, onSendMessage }: Props) {
   const [message, setMessage] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize textarea to fit content (single row minimum, grows with newlines)
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [message]);
 
   const handleSend = useCallback(() => {
     const trimmed = message.trim();
@@ -26,7 +35,7 @@ export function ActionBar({ agentId: _agentId, elapsed, usage, isComplete, onSto
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
         e.preventDefault();
         handleSend();
       }
@@ -42,13 +51,14 @@ export function ActionBar({ agentId: _agentId, elapsed, usage, isComplete, onSto
       {/* Message input */}
       {!isComplete && (
         <div className="flex-1 flex items-center gap-2">
-          <input
-            type="text"
-            className="flex-1 bg-ctp-base border border-surface-0 rounded px-2 py-1 text-xs text-ctp-text placeholder-ctp-subtext0 outline-none focus:border-indigo-500/50 transition-colors"
+          <textarea
+            ref={textareaRef}
+            className="flex-1 bg-ctp-base border border-surface-0 rounded px-2 py-1 text-xs text-ctp-text placeholder-ctp-subtext0 outline-none focus:border-indigo-500/50 transition-colors resize-none overflow-hidden leading-5"
             placeholder="Send a message..."
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
+            rows={1}
             data-testid="message-input"
           />
           <button

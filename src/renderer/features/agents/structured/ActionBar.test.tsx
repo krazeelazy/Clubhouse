@@ -57,7 +57,7 @@ describe('ActionBar', () => {
     const onSendMessage = vi.fn();
     render(<ActionBar {...defaultProps} onSendMessage={onSendMessage} />);
 
-    const input = screen.getByTestId('message-input') as HTMLInputElement;
+    const input = screen.getByTestId('message-input') as HTMLTextAreaElement;
     act(() => {
       fireEvent.change(input, { target: { value: 'test' } });
       fireEvent.keyDown(input, { key: 'Enter' });
@@ -80,5 +80,37 @@ describe('ActionBar', () => {
   it('formats elapsed time as minutes', () => {
     render(<ActionBar {...defaultProps} elapsed={125_000} />);
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
+  });
+
+  it('does not send on Shift+Enter', () => {
+    const onSendMessage = vi.fn();
+    render(<ActionBar {...defaultProps} onSendMessage={onSendMessage} />);
+
+    const input = screen.getByTestId('message-input');
+    act(() => {
+      fireEvent.change(input, { target: { value: 'multiline' } });
+      fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    });
+
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not send on Ctrl+Enter', () => {
+    const onSendMessage = vi.fn();
+    render(<ActionBar {...defaultProps} onSendMessage={onSendMessage} />);
+
+    const input = screen.getByTestId('message-input');
+    act(() => {
+      fireEvent.change(input, { target: { value: 'multiline' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    });
+
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('renders a textarea for multiline input', () => {
+    render(<ActionBar {...defaultProps} />);
+    const input = screen.getByTestId('message-input');
+    expect(input.tagName).toBe('TEXTAREA');
   });
 });

@@ -1,100 +1,145 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { attachNewlineHandler, BRACKETED_NEWLINE, QUOTED_NEWLINE } from './newline-handler';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { attachNewlineHandler, BRACKETED_NEWLINE, QUOTED_NEWLINE, WIN32_SHIFT_ENTER } from './newline-handler';
 
-/** Minimal mock Terminal that captures the key handler. */
 function createMockTerminal(opts?: { bracketedPasteMode?: boolean }) {
-  let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
-
   return {
     modes: { bracketedPasteMode: opts?.bracketedPasteMode ?? false },
-    attachCustomKeyEventHandler: vi.fn((handler: (e: KeyboardEvent) => boolean) => {
-      keyHandler = handler;
+  };
+}
+
+function createMockContainer() {
+  const listeners: Map<string, { handler: EventListener; capture: boolean }[]> = new Map();
+  return {
+    addEventListener: vi.fn((type: string, handler: EventListener, capture?: boolean) => {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type)!.push({ handler, capture: !!capture });
     }),
-    _fireKey(e: Partial<KeyboardEvent>): boolean {
-      if (!keyHandler) throw new Error('No key handler attached');
-      return keyHandler({
+    removeEventListener: vi.fn(),
+    _dispatch(e: Partial<KeyboardEvent>) {
+      const event = {
         type: 'keydown',
+        key: '',
         ctrlKey: false,
-        metaKey: false,
         shiftKey: false,
         altKey: false,
-        key: '',
+        metaKey: false,
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
         ...e,
-      } as KeyboardEvent);
+      } as unknown as KeyboardEvent;
+      for (const entry of listeners.get('keydown') ?? []) {
+        entry.handler(event);
+      }
+      return event;
     },
   };
 }
 
 describe('newline-handler', () => {
   let writeToPty: ReturnType<typeof vi.fn>;
+  let originalPlatform: string | undefined;
 
   beforeEach(() => {
     writeToPty = vi.fn();
+    originalPlatform = (window as any).clubhouse?.platform;
   });
 
-  describe('with bracketed paste mode (modern shells)', () => {
+  afterEach(() => {
+    if (originalPlatform !== undefined) {
+      (window as any).clubhouse.platform = originalPlatform;
+    }
+  });
+
+  function setPlatform(platform: string) {
+    if (!(window as any).clubhouse) (window as any).clubhouse = {};
+    (window as any).clubhouse.platform = platform;
+  }
+
+  describe('Windows (win32-input-mode)', () => {
+    it('sends win32 Shift+Enter sequence on Windows', () => {
+      setPlatform('win32');
+      const term = createMockTerminal();
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
+
+      container._dispatch({ key: 'Enter', shiftKey: true });
+
+      expect(writeToPty).toHaveBeenCalledWith(WIN32_SHIFT_ENTER);
+    });
+
+    it('sends win32 Shift+Enter for Ctrl+Enter on Windows', () => {
+      setPlatform('win32');
+      const term = createMockTerminal();
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
+
+      container._dispatch({ key: 'Enter', ctrlKey: true });
+
+      expect(writeToPty).toHaveBeenCalledWith(WIN32_SHIFT_ENTER);
+    });
+  });
+
+  describe('macOS/Linux with bracketed paste mode', () => {
     it('sends bracketed newline for Shift+Enter', () => {
+      setPlatform('darwin');
       const term = createMockTerminal({ bracketedPasteMode: true });
-      attachNewlineHandler(term as any, writeToPty);
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
 
-      const consumed = term._fireKey({ key: 'Enter', shiftKey: true });
+      container._dispatch({ key: 'Enter', shiftKey: true });
 
-      expect(consumed).toBe(false);
-      expect(writeToPty).toHaveBeenCalledWith(BRACKETED_NEWLINE);
-    });
-
-    it('sends bracketed newline for Ctrl+Enter', () => {
-      const term = createMockTerminal({ bracketedPasteMode: true });
-      attachNewlineHandler(term as any, writeToPty);
-
-      const consumed = term._fireKey({ key: 'Enter', ctrlKey: true });
-
-      expect(consumed).toBe(false);
       expect(writeToPty).toHaveBeenCalledWith(BRACKETED_NEWLINE);
     });
   });
 
-  describe('without bracketed paste mode (fallback)', () => {
+  describe('macOS/Linux without bracketed paste mode (fallback)', () => {
     it('sends quoted-insert newline for Shift+Enter', () => {
+      setPlatform('darwin');
       const term = createMockTerminal({ bracketedPasteMode: false });
-      attachNewlineHandler(term as any, writeToPty);
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
 
-      const consumed = term._fireKey({ key: 'Enter', shiftKey: true });
+      container._dispatch({ key: 'Enter', shiftKey: true });
 
-      expect(consumed).toBe(false);
       expect(writeToPty).toHaveBeenCalledWith(QUOTED_NEWLINE);
     });
   });
 
   describe('passthrough', () => {
-    it('lets plain Enter pass through', () => {
-      const term = createMockTerminal({ bracketedPasteMode: true });
-      attachNewlineHandler(term as any, writeToPty);
+    it('does not intercept plain Enter', () => {
+      setPlatform('win32');
+      const term = createMockTerminal();
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
 
-      const consumed = term._fireKey({ key: 'Enter' });
+      const event = container._dispatch({ key: 'Enter' });
 
-      expect(consumed).toBe(true);
       expect(writeToPty).not.toHaveBeenCalled();
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
-    it('lets unrelated keys pass through', () => {
-      const term = createMockTerminal({ bracketedPasteMode: true });
-      attachNewlineHandler(term as any, writeToPty);
+    it('does not intercept unrelated keys', () => {
+      const term = createMockTerminal();
+      const container = createMockContainer();
+      attachNewlineHandler(term as any, container as any, writeToPty);
 
-      expect(term._fireKey({ key: 'a' })).toBe(true);
-      expect(term._fireKey({ key: 'Escape' })).toBe(true);
-      expect(term._fireKey({ ctrlKey: true, key: 'c' })).toBe(true);
+      container._dispatch({ key: 'a' });
+      container._dispatch({ key: 'Escape' });
+
       expect(writeToPty).not.toHaveBeenCalled();
     });
+  });
 
-    it('ignores keyup events', () => {
-      const term = createMockTerminal({ bracketedPasteMode: true });
-      attachNewlineHandler(term as any, writeToPty);
+  describe('cleanup', () => {
+    it('returns a cleanup function that removes the listener', () => {
+      const term = createMockTerminal();
+      const container = createMockContainer();
+      const cleanup = attachNewlineHandler(term as any, container as any, writeToPty);
 
-      const consumed = term._fireKey({ type: 'keyup' as any, key: 'Enter', shiftKey: true });
+      expect(container.addEventListener).toHaveBeenCalledWith('keydown', expect.any(Function), true);
 
-      expect(consumed).toBe(true);
-      expect(writeToPty).not.toHaveBeenCalled();
+      cleanup();
+      expect(container.removeEventListener).toHaveBeenCalledWith('keydown', expect.any(Function), true);
     });
   });
 
@@ -105,6 +150,10 @@ describe('newline-handler', () => {
 
     it('QUOTED_NEWLINE is Ctrl-V + LF', () => {
       expect(QUOTED_NEWLINE).toBe('\x16\n');
+    });
+
+    it('WIN32_SHIFT_ENTER is a valid win32-input-mode sequence', () => {
+      expect(WIN32_SHIFT_ENTER).toBe('\x1b[13;28;13;1;16;1_');
     });
   });
 });

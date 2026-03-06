@@ -57,7 +57,7 @@ export function ShellTerminal({ sessionId, focused }: Props) {
       window.clubhouse.pty.write(sessionId, data);
     });
 
-    attachNewlineHandler(term, (data) => window.clubhouse.pty.write(sessionId, data));
+    const removeNewlineHandler = attachNewlineHandler(term, containerRef.current, (data) => window.clubhouse.pty.write(sessionId, data));
 
     // Batch PTY data writes using rAF to avoid 100+ DOM renders/sec.
     // Data arriving between frames is concatenated and flushed once per paint.
@@ -114,6 +114,7 @@ export function ShellTerminal({ sessionId, focused }: Props) {
     return () => {
       if (flushId) cancelAnimationFrame(flushId);
       inputDisposable.dispose();
+      removeNewlineHandler();
       removeDataListener();
       removeExitListener();
       resizeObserver.disconnect();

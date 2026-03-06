@@ -5,6 +5,7 @@ import { useThemeStore } from '../../stores/themeStore';
 import { useClipboardSettingsStore } from '../../stores/clipboardSettingsStore';
 import { useAgentStore } from '../../stores/agentStore';
 import { attachClipboardHandlers } from '../terminal/clipboard';
+import { attachNewlineHandler } from '../terminal/newline-handler';
 import { useFileDrop } from '../terminal/useFileDrop';
 
 /** How long PTY output must be silent before we consider a resume "done". */
@@ -80,6 +81,8 @@ export function AgentTerminal({ agentId, focused }: Props) {
     const inputDisposable = term.onData((data) => {
       window.clubhouse.pty.write(agentId, data);
     });
+
+    attachNewlineHandler(term, containerRef.current, (data) => window.clubhouse.pty.write(agentId, data));
 
     // Gate live PTY data until after the buffer snapshot has been replayed.
     // Without this, the same output can be written twice: once from the

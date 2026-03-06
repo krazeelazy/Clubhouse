@@ -8,7 +8,7 @@ const g = globalThis as any;
 g.__testTerminal = null;
 g.__testFitAddon = null;
 g.__testAttachClipboard = vi.fn().mockReturnValue(vi.fn());
-g.__testAttachNewline = vi.fn();
+g.__testAttachNewline = vi.fn().mockReturnValue(vi.fn());
 
 vi.mock('@xterm/xterm', () => {
   class Terminal {
@@ -63,6 +63,7 @@ describe('ShellTerminal', () => {
     g.__testAttachClipboard.mockClear();
     g.__testAttachClipboard.mockReturnValue(vi.fn());
     g.__testAttachNewline.mockClear();
+    g.__testAttachNewline.mockReturnValue(vi.fn());
     mockOnDataCallback = null;
     mockOnExitCallback = null;
     mockRemoveDataListener.mockClear();
