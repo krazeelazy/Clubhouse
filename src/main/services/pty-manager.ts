@@ -46,7 +46,7 @@ function flushPendingCommand(session: ManagedSession): boolean {
   } else {
     // printf clears the screen so the terminal driver echo and shell
     // prompt echo of the exec command are wiped before the agent starts.
-    session.process.write(`printf '\\033[2J\\033[H'; exec ${cmd}\n`);
+    session.process.write(`printf '\\033[2J\\033[H'; ${cmd}\n`);
   }
   return true;
 }
@@ -118,7 +118,7 @@ function cleanupSession(agentId: string): void {
   sessions.delete(agentId);
 }
 
-export function spawn(agentId: string, cwd: string, binary: string, args: string[] = [], extraEnv?: Record<string, string>, onExit?: (agentId: string, exitCode: number, buffer?: string) => void): void {
+export function spawn(agentId: string, cwd: string, binary: string, args: string[] = [], extraEnv?: Record<string, string>, onExit?: (agentId: string, exitCode: number, buffer?: string) => void, commandPrefix?: string): void {
   if (sessions.has(agentId)) {
     const existing = sessions.get(agentId)!;
     try { existing.process.kill(); } catch {}
@@ -144,7 +144,7 @@ export function spawn(agentId: string, cwd: string, binary: string, args: string
       // This avoids cmd.exe /c argument-quoting issues that cause the mission
       // text to be mangled or lost when passed directly in the args array.
       const shellCmd = [binary, ...args].map(a => winQuoteArg(a)).join(' ');
-      pendingCommand = shellCmd;
+      pendingCommand = commandPrefix ? `${commandPrefix} & ${shellCmd}` : shellCmd;
 
       proc = pty.spawn('cmd.exe', [], {
         name: 'xterm-256color',
@@ -156,7 +156,9 @@ export function spawn(agentId: string, cwd: string, binary: string, args: string
     } else {
       const shellCmd = [binary, ...args].map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
       const shell = process.env.SHELL || '/bin/zsh';
-      pendingCommand = shellCmd;
+      pendingCommand = commandPrefix
+        ? `${commandPrefix} && exec ${shellCmd}`
+        : `exec ${shellCmd}`;
 
       proc = pty.spawn(shell, ['-il'], {
         name: 'xterm-256color',
