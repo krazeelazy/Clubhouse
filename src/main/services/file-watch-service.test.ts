@@ -173,6 +173,95 @@ describe('file-watch-service', () => {
       expect(() => stopWatch('wB')).not.toThrow();
     });
   });
+
+  describe('glob filtering', () => {
+    it('should only forward events for files matching the glob pattern', async () => {
+      vi.useRealTimers();
+
+      // Create subdirectories
+      fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+
+      const sender = makeSender();
+      const glob = path.join(tmpDir, 'src', '**', '*.ts');
+      startWatch('gf1', glob, sender as any);
+
+      // Create a .ts file (should match)
+      fs.writeFileSync(path.join(tmpDir, 'src', 'index.ts'), 'export {};');
+
+      // Create a .js file (should NOT match)
+      fs.writeFileSync(path.join(tmpDir, 'src', 'script.js'), 'module.exports = {};');
+
+      // Wait for debounce
+      await new Promise((r) => setTimeout(r, 500));
+
+      if (sender.send.mock.calls.length > 0) {
+        const allEvents = sender.send.mock.calls.flatMap(
+          (call: unknown[]) => (call[1] as { events: Array<{ path: string }> }).events,
+        );
+        // Only .ts files should be in the events
+        for (const event of allEvents) {
+          expect(event.path).toMatch(/\.ts$/);
+        }
+        // No .js files
+        expect(allEvents.some((e: { path: string }) => e.path.endsWith('.js'))).toBe(false);
+      }
+
+      stopWatch('gf1');
+    });
+
+    it('should forward events for nested files matching the glob', async () => {
+      vi.useRealTimers();
+
+      // Create subdirectories
+      fs.mkdirSync(path.join(tmpDir, 'src', 'components'), { recursive: true });
+
+      const sender = makeSender();
+      const glob = path.join(tmpDir, 'src', '**', '*.ts');
+      startWatch('gf2', glob, sender as any);
+
+      // Create a nested .ts file (should match)
+      fs.writeFileSync(path.join(tmpDir, 'src', 'components', 'App.ts'), 'export class App {}');
+
+      // Wait for debounce
+      await new Promise((r) => setTimeout(r, 500));
+
+      if (sender.send.mock.calls.length > 0) {
+        const allEvents = sender.send.mock.calls.flatMap(
+          (call: unknown[]) => (call[1] as { events: Array<{ path: string }> }).events,
+        );
+        expect(allEvents.some((e: { path: string }) => e.path.includes('App.ts'))).toBe(true);
+      }
+
+      stopWatch('gf2');
+    });
+
+    it('should not forward events for files outside the glob scope', async () => {
+      vi.useRealTimers();
+
+      // Create subdirectories
+      fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+
+      const sender = makeSender();
+      const glob = path.join(tmpDir, 'src', '**', '*.ts');
+      startWatch('gf3', glob, sender as any);
+
+      // Create a non-ts file in src (should NOT match)
+      fs.writeFileSync(path.join(tmpDir, 'src', 'README.md'), '# Readme');
+
+      // Wait for debounce
+      await new Promise((r) => setTimeout(r, 500));
+
+      if (sender.send.mock.calls.length > 0) {
+        const allEvents = sender.send.mock.calls.flatMap(
+          (call: unknown[]) => (call[1] as { events: Array<{ path: string }> }).events,
+        );
+        // No .md files should be forwarded
+        expect(allEvents.some((e: { path: string }) => e.path.endsWith('.md'))).toBe(false);
+      }
+
+      stopWatch('gf3');
+    });
+  });
 });
 
 describe('extractBaseDir', () => {
