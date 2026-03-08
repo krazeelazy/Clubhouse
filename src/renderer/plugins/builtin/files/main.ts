@@ -1,14 +1,23 @@
+import React, { useState, useEffect } from 'react';
 import type { PluginContext, PluginAPI, PluginModule } from '../../../../shared/plugin-types';
 import { fileState } from './state';
 import { disposeAllModels } from './MonacoEditor';
 import { FileTree } from './FileTree';
 import { FileViewer } from './FileViewer';
+import { SearchPanel } from './SearchPanel';
 
 export function activate(ctx: PluginContext, api: PluginAPI): void {
   // Refresh file tree command
   ctx.subscriptions.push(
     api.commands.register('refresh', () => {
       fileState.triggerRefresh();
+    }),
+  );
+
+  // Search across files — Meta+Shift+F
+  ctx.subscriptions.push(
+    api.commands.register('search', () => {
+      fileState.setSearchMode(true);
     }),
   );
 
@@ -78,7 +87,22 @@ export function deactivate(): void {
   disposeAllModels();
 }
 
-export const SidebarPanel = FileTree;
+function SidebarWrapper({ api }: { api: PluginAPI }) {
+  const [searchMode, setSearchMode] = useState(fileState.searchMode);
+
+  useEffect(() => {
+    return fileState.subscribe(() => {
+      setSearchMode(fileState.searchMode);
+    });
+  }, []);
+
+  if (searchMode) {
+    return React.createElement(SearchPanel, { api });
+  }
+  return React.createElement(FileTree, { api });
+}
+
+export const SidebarPanel = SidebarWrapper;
 export const MainPanel = FileViewer;
 
 // Compile-time type assertion

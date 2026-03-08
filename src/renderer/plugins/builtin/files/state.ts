@@ -58,6 +58,9 @@ export const fileState = {
   // Signals
   isDirty: false,                     // Aggregate: any tab dirty?
   refreshCount: 0,
+  searchMode: false,
+  /** When set, FileViewer should navigate to this line and highlight it */
+  scrollToLine: null as number | null,
   listeners: new Set<() => void>(),
 
   // ── Tab queries ──────────────────────────────────────────────────
@@ -403,6 +406,21 @@ export const fileState = {
     this.notify();
   },
 
+  setSearchMode(enabled: boolean): void {
+    this.searchMode = enabled;
+    this.notify();
+  },
+
+  navigateToMatch(filePath: string, line: number): void {
+    this.openTab(filePath, { preview: false });
+    this.scrollToLine = line;
+    this.notify();
+  },
+
+  clearScrollToLine(): void {
+    this.scrollToLine = null;
+  },
+
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => {
@@ -467,6 +485,8 @@ export const fileState = {
     this.selectedPath = null;
     this.isDirty = false;
     this.refreshCount = 0;
+    this.searchMode = false;
+    this.scrollToLine = null;
     this.listeners.clear();
   },
 };

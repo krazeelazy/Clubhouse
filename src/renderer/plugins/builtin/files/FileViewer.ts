@@ -89,6 +89,7 @@ export function FileViewer({ api }: { api: PluginAPI }) {
   const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('preview');
   const [loading, setLoading] = useState(false);
   const [unsavedDialog, setUnsavedDialog] = useState<{ tabId: string; pendingAction: () => void } | null>(null);
+  const [scrollToLine, setScrollToLine] = useState<number | null>(null);
 
   // Cache of loaded file data per path to avoid reloading on tab switch
   const fileCache = useRef<Map<string, LoadedFile>>(new Map());
@@ -99,6 +100,13 @@ export function FileViewer({ api }: { api: PluginAPI }) {
     return fileState.subscribe(() => {
       const newActiveTab = fileState.getActiveTab();
       setActiveTab(newActiveTab ? { ...newActiveTab } : undefined);
+
+      // Handle scroll-to-line from search results
+      const lineTarget = fileState.scrollToLine;
+      if (lineTarget) {
+        setTimeout(() => setScrollToLine(lineTarget), 100);
+        fileState.clearScrollToLine();
+      }
     });
   }, []);
 
@@ -461,6 +469,7 @@ export function FileViewer({ api }: { api: PluginAPI }) {
             filePath: activeTab.filePath,
             initialScrollState: activeTab.scrollState,
             onScrollStateChange: handleScrollStateChange,
+            scrollToLine,
           }),
         );
       }
@@ -482,6 +491,7 @@ export function FileViewer({ api }: { api: PluginAPI }) {
             filePath: activeTab.filePath,
             initialScrollState: activeTab.scrollState,
             onScrollStateChange: handleScrollStateChange,
+            scrollToLine,
           }),
         );
       }
@@ -498,6 +508,7 @@ export function FileViewer({ api }: { api: PluginAPI }) {
           filePath: activeTab.filePath,
           initialScrollState: activeTab.scrollState,
           onScrollStateChange: handleScrollStateChange,
+          scrollToLine,
         }),
       );
       break;

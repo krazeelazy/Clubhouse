@@ -15,6 +15,7 @@ export const manifest: PluginManifest = {
     tab: { label: 'Files', icon: FOLDER_ICON, layout: 'sidebar-content' },
     commands: [
       { id: 'refresh', title: 'Refresh File Tree', defaultBinding: 'Meta+Shift+R' },
+      { id: 'search', title: 'Search Across Files', defaultBinding: 'Meta+Shift+F' },
       { id: 'close-tab', title: 'Close Active Tab', defaultBinding: 'Meta+Shift+W' },
       { id: 'reopen-tab', title: 'Reopen Last Closed Tab', defaultBinding: 'Meta+Shift+L' },
       { id: 'next-tab', title: 'Next Tab', defaultBinding: 'Meta+Shift+]' },

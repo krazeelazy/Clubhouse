@@ -112,11 +112,13 @@ interface MonacoEditorProps {
   filePath: string;
   initialScrollState?: ScrollState | null;
   onScrollStateChange?: (state: ScrollState) => void;
+  /** When set, scroll to this line and briefly highlight it */
+  scrollToLine?: number | null;
 }
 
 export function MonacoEditor({
   value, language, onSave, onDirtyChange, filePath,
-  initialScrollState, onScrollStateChange,
+  initialScrollState, onScrollStateChange, scrollToLine,
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<any>(null);
@@ -279,6 +281,21 @@ export function MonacoEditor({
       onDirtyChangeRef.current(false);
     }
   }, [value, filePath]);
+
+  // Scroll to line when requested (from search results)
+  useEffect(() => {
+    if (!scrollToLine || !editorRef.current) return;
+
+    const editor = editorRef.current;
+    editor.revealLineInCenter(scrollToLine);
+    editor.setSelection({
+      startLineNumber: scrollToLine,
+      startColumn: 1,
+      endLineNumber: scrollToLine,
+      endColumn: 1000,
+    });
+    editor.focus();
+  }, [scrollToLine]);
 
   return React.createElement('div', {
     ref: containerRef,
