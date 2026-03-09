@@ -1,5 +1,27 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('fs', () => ({
+  readFileSync: vi.fn(),
+}));
+
+vi.mock('./plugin-discovery', () => ({
+  discoverCommunityPlugins: vi.fn(() => []),
+}));
+
+vi.mock('./plugin-storage', () => ({
+  getGlobalPluginDataDir: vi.fn(() => '/plugin-data'),
+}));
+
+vi.mock('./log-service', () => ({
+  appLog: vi.fn(),
+}));
+
+import * as fs from 'fs';
+import * as pluginDiscovery from './plugin-discovery';
+import { appLog } from './log-service';
 import {
+  initializeTrustedManifests,
+  refreshManifest,
   registerManifest,
   registerTrustedManifest,
   getManifest,
@@ -16,12 +38,17 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
     version: '1.0.0',
     engine: { api: 0.5 },
     scope: 'project',
+    permissions: ['process'],
+    allowedCommands: ['git'],
+    contributes: { help: {} },
     ...overrides,
   };
 }
 
 describe('plugin-manifest-registry', () => {
   beforeEach(() => {
+    delete process.env.CLUBHOUSE_SAFE_MODE;
+    vi.clearAllMocks();
     clear();
   });
 
@@ -48,7 +75,7 @@ describe('plugin-manifest-registry', () => {
     });
 
     it('returns empty array when trusted manifest has no allowedCommands', () => {
-      registerTrustedManifest('test-plugin', makeManifest());
+      registerTrustedManifest('test-plugin', makeManifest({ allowedCommands: undefined }));
       expect(getAllowedCommands('test-plugin')).toEqual([]);
     });
 
@@ -80,21 +107,16 @@ describe('plugin-manifest-registry', () => {
     });
 
     it('cannot overwrite trusted allowedCommands via untrusted re-registration', () => {
-      // Trusted manifest registered during discovery
       registerTrustedManifest('test-plugin', makeManifest({ allowedCommands: ['git'] }));
-      // Malicious IPC call tries to add 'sh' to allowedCommands
       registerManifest('test-plugin', makeManifest({ allowedCommands: ['sh', 'bash', 'rm'] }));
-      // getAllowedCommands should still return trusted values only
       expect(getAllowedCommands('test-plugin')).toEqual(['git']);
     });
 
     it('cannot register a fake plugin to gain allowedCommands', () => {
-      // Attacker registers a new plugin with allowedCommands via IPC
       registerManifest('evil-plugin', makeManifest({
         id: 'evil-plugin',
         allowedCommands: ['sh', 'bash'],
       }));
-      // No trusted manifest exists, so no commands allowed
       expect(getAllowedCommands('evil-plugin')).toEqual([]);
     });
   });
@@ -103,28 +125,23 @@ describe('plugin-manifest-registry', () => {
 
   describe('self-escalation prevention', () => {
     it('blocks self-escalation: register new manifest then exec', () => {
-      // Scenario: plugin calls registerManifest to create allowedCommands
       registerManifest('malicious', makeManifest({
         id: 'malicious',
         permissions: ['process'],
         allowedCommands: ['sh', 'bash', 'curl', 'rm'],
       }));
-      // process.exec would check getAllowedCommands — should be empty
       expect(getAllowedCommands('malicious')).toEqual([]);
     });
 
     it('blocks self-escalation: overwrite existing manifest', () => {
-      // Plugin was legitimately discovered with only 'git' allowed
       registerTrustedManifest('my-plugin', makeManifest({
         id: 'my-plugin',
         allowedCommands: ['git'],
       }));
-      // Plugin's own code tries to escalate via IPC
       registerManifest('my-plugin', makeManifest({
         id: 'my-plugin',
         allowedCommands: ['git', 'sh', 'bash', 'rm'],
       }));
-      // Should still only have 'git' from the trusted registration
       expect(getAllowedCommands('my-plugin')).toEqual(['git']);
     });
   });
@@ -165,5 +182,93 @@ describe('plugin-manifest-registry', () => {
       registerManifest('test-plugin', makeManifest({ name: 'Untrusted' }));
       expect(getManifest('test-plugin')?.name).toBe('Untrusted');
     });
+  });
+
+  it('loads trusted builtin manifests at initialization', () => {
+    initializeTrustedManifests();
+
+    expect(getManifest('hub')).toBeDefined();
+    expect(getManifest('terminal')).toBeDefined();
+    expect(getManifest('files')).toBeDefined();
+  });
+
+  it('loads validated community manifests from disk when external plugins are enabled', () => {
+    vi.mocked(fs.readFileSync).mockReturnValue('true');
+    vi.mocked(pluginDiscovery.discoverCommunityPlugins).mockReturnValue([
+      {
+        manifest: makeManifest({ id: 'community-plugin', allowedCommands: ['git', 'node'] }),
+        pluginPath: '/plugins/community-plugin',
+        fromMarketplace: false,
+      },
+      {
+        manifest: { id: 'broken-plugin' },
+        pluginPath: '/plugins/broken-plugin',
+        fromMarketplace: false,
+      } as any,
+    ]);
+
+    initializeTrustedManifests();
+
+    expect(getAllowedCommands('community-plugin')).toEqual(['git', 'node']);
+    expect(getManifest('broken-plugin')).toBeUndefined();
+    expect(appLog).toHaveBeenCalledWith(
+      'core:plugins',
+      'warn',
+      'Skipping invalid community plugin manifest for security policy',
+      expect.objectContaining({
+        meta: expect.objectContaining({ pluginPath: '/plugins/broken-plugin' }),
+      }),
+    );
+  });
+
+  it('does not load any manifests in safe mode', () => {
+    process.env.CLUBHOUSE_SAFE_MODE = '1';
+    vi.mocked(fs.readFileSync).mockReturnValue('true');
+    vi.mocked(pluginDiscovery.discoverCommunityPlugins).mockReturnValue([
+      {
+        manifest: makeManifest({ id: 'community-plugin' }),
+        pluginPath: '/plugins/community-plugin',
+        fromMarketplace: false,
+      },
+    ]);
+
+    initializeTrustedManifests();
+
+    expect(getManifest('hub')).toBeUndefined();
+    expect(getManifest('community-plugin')).toBeUndefined();
+  });
+
+  it('refreshes a community manifest from disk instead of keeping stale renderer state', () => {
+    vi.mocked(fs.readFileSync).mockReturnValue('true');
+    vi.mocked(pluginDiscovery.discoverCommunityPlugins).mockReturnValue([
+      {
+        manifest: makeManifest({ id: 'community-plugin', allowedCommands: ['git'] }),
+        pluginPath: '/plugins/community-plugin',
+        fromMarketplace: false,
+      },
+    ]);
+    initializeTrustedManifests();
+
+    registerTrustedManifest('community-plugin', makeManifest({ id: 'community-plugin', allowedCommands: ['rm', 'bash'] }));
+    refreshManifest('community-plugin');
+
+    expect(getAllowedCommands('community-plugin')).toEqual(['git']);
+  });
+
+  it('removes a community manifest when refresh cannot find a trusted source', () => {
+    vi.mocked(fs.readFileSync).mockReturnValue('true');
+    vi.mocked(pluginDiscovery.discoverCommunityPlugins).mockReturnValue([
+      {
+        manifest: makeManifest({ id: 'community-plugin', allowedCommands: ['git'] }),
+        pluginPath: '/plugins/community-plugin',
+        fromMarketplace: false,
+      },
+    ]);
+    initializeTrustedManifests();
+
+    vi.mocked(pluginDiscovery.discoverCommunityPlugins).mockReturnValue([]);
+    refreshManifest('community-plugin');
+
+    expect(getManifest('community-plugin')).toBeUndefined();
   });
 });
