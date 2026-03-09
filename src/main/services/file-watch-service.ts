@@ -141,6 +141,9 @@ export function cleanupWatchesForWindow(win: BrowserWindow): void {
   }
 }
 
+/** @internal Exported for tests only. */
+export { activeWatches as _activeWatches };
+
 /** Return the number of currently active watches (for testing). */
 export function getActiveWatchCount(): number {
   return activeWatches.size;
