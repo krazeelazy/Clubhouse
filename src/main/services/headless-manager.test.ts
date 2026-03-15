@@ -97,6 +97,7 @@ import {
   getTranscriptInfo,
   readTranscriptPage,
   setMaxTranscriptBytes,
+  setMaxStderrBytes,
   startStaleSweep,
   stopStaleSweep,
 } from './headless-manager';
@@ -122,6 +123,7 @@ describe('headless-manager', () => {
     }
     // Reset transcript cap to default
     setMaxTranscriptBytes(10 * 1024 * 1024);
+    setMaxStderrBytes(64 * 1024);
     stopStaleSweep();
     vi.useRealTimers();
   });
@@ -943,6 +945,62 @@ describe('headless-manager', () => {
       expect(lines.length).toBeLessThan(6);
       expect(lines.length).toBeGreaterThan(0);
       expect(transcript).toContain('trigger');
+    });
+  });
+
+  describe('stderr memory cap', () => {
+    it('retains recent stderr output when the buffer exceeds the cap', () => {
+      setMaxStderrBytes(70);
+      spawnHeadless('test-agent', '/project', '/usr/local/bin/claude', ['-p', 'test']);
+
+      mockProcess.stderr!.emit('data', Buffer.from(`first-${'x'.repeat(30)}`));
+      mockProcess.stderr!.emit('data', Buffer.from(`second-${'y'.repeat(30)}`));
+      mockProcess.stderr!.emit('data', Buffer.from(`third-${'z'.repeat(30)}`));
+
+      mockProcess.emit('close', 1);
+
+      expect(appLog).toHaveBeenCalledWith(
+        'core:headless',
+        'info',
+        'Process exited',
+        expect.objectContaining({
+          meta: expect.objectContaining({
+            agentId: 'test-agent',
+            stderr: expect.stringContaining('third-'),
+          }),
+        }),
+      );
+
+      expect(appLog).not.toHaveBeenCalledWith(
+        'core:headless',
+        'info',
+        'Process exited',
+        expect.objectContaining({
+          meta: expect.objectContaining({
+            stderr: expect.stringContaining('first-'),
+          }),
+        }),
+      );
+    });
+
+    it('setMaxStderrBytes changes the retention cap', () => {
+      setMaxStderrBytes(20);
+      spawnHeadless('test-agent', '/project', '/usr/local/bin/claude', ['-p', 'test']);
+
+      mockProcess.stderr!.emit('data', Buffer.from('alpha-alpha-alpha'));
+      mockProcess.stderr!.emit('data', Buffer.from('beta'));
+      mockProcess.emit('close', 1);
+
+      expect(appLog).toHaveBeenCalledWith(
+        'core:headless',
+        'info',
+        'Process exited',
+        expect.objectContaining({
+          meta: expect.objectContaining({
+            stderr: 'beta',
+          }),
+        }),
+      );
     });
   });
 
