@@ -1,5 +1,5 @@
 import * as path from 'path';
-import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { getProvider, getAllProviders, OrchestratorId, OrchestratorProvider, isHookCapable, isHeadlessCapable, isSessionCapable, isStructuredCapable } from '../orchestrators';
 import { waitReady as waitHookServerReady } from './hook-server';
@@ -69,7 +69,7 @@ export function untrackAgent(agentId: string): void {
 async function readProjectOrchestrator(projectPath: string): Promise<OrchestratorId | undefined> {
   try {
     const settingsPath = path.join(projectPath, '.clubhouse', 'settings.json');
-    const raw = JSON.parse(await fs.promises.readFile(settingsPath, 'utf-8'));
+    const raw = JSON.parse(await fsp.readFile(settingsPath, 'utf-8'));
     return raw.orchestrator as OrchestratorId | undefined;
   } catch {
     return undefined;
@@ -160,7 +160,7 @@ export async function spawnAgent(params: SpawnAgentParams): Promise<void> {
     // Clubhouse Mode: materialize project defaults into worktree before spawn
     if (params.kind === 'durable' && clubhouseModeSettings.isClubhouseModeEnabled(params.projectPath)) {
       try {
-        const config = getDurableConfig(params.projectPath, params.agentId);
+        const config = await getDurableConfig(params.projectPath, params.agentId);
         if (config && !config.clubhouseModeOverride && config.worktreePath) {
           await materializeAgent({ projectPath: params.projectPath, agent: config, provider });
         }
@@ -179,7 +179,7 @@ export async function spawnAgent(params: SpawnAgentParams): Promise<void> {
     let resolvedMcpIds: string[] = [];
     if (wrapperConfig) {
       if (params.kind === 'durable') {
-        const config = getDurableConfig(params.projectPath, params.agentId);
+        const config = await getDurableConfig(params.projectPath, params.agentId);
         resolvedMcpIds = config?.mcpIds || await readDefaultMcps(params.projectPath);
       } else {
         resolvedMcpIds = await readDefaultMcps(params.projectPath);
@@ -228,7 +228,7 @@ export async function spawnAgent(params: SpawnAgentParams): Promise<void> {
           headlessArgs = wrapped.args;
         }
         const spawnEnv = { ...headlessResult.env, ...profileEnv, ...wrapperConfig?.env, CLUBHOUSE_AGENT_ID: params.agentId };
-        headlessManager.spawnHeadless(
+        await headlessManager.spawnHeadless(
           params.agentId,
           params.cwd,
           headlessBin,
@@ -422,18 +422,18 @@ export async function listSessions(
   orchestratorId?: OrchestratorId,
 ): Promise<Array<{ sessionId: string; startedAt: string; lastActiveAt: string; friendlyName?: string }>> {
   const { getDurableConfig, getSessionHistory } = await import('./agent-config');
-  const config = getDurableConfig(projectPath, agentId);
+  const config = await getDurableConfig(projectPath, agentId);
   if (!config) return [];
 
   const provider = await resolveOrchestrator(projectPath, orchestratorId || config.orchestrator);
   const cwd = config.worktreePath || projectPath;
 
   // Get Clubhouse-tracked session history (includes friendly names)
-  const clubhouseHistory = getSessionHistory(projectPath, agentId);
+  const clubhouseHistory = await getSessionHistory(projectPath, agentId);
   const nameMap = new Map(
     clubhouseHistory
-      .filter((s) => s.friendlyName)
-      .map((s) => [s.sessionId, s.friendlyName!])
+      .filter((s: { friendlyName?: string }) => s.friendlyName)
+      .map((s: { sessionId: string; friendlyName?: string }) => [s.sessionId, s.friendlyName!])
   );
 
   // Try to get provider-discovered sessions

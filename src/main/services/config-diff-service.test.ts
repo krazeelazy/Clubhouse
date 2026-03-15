@@ -23,6 +23,20 @@ vi.mock('fs', () => ({
   },
 }));
 
+vi.mock('fs/promises', () => ({
+  readFile: vi.fn(async () => { throw new Error('ENOENT'); }),
+  writeFile: vi.fn(async () => undefined),
+  mkdir: vi.fn(async () => undefined),
+  readdir: vi.fn(async () => []),
+  rm: vi.fn(async () => undefined),
+  unlink: vi.fn(async () => undefined),
+  access: vi.fn(async () => { throw new Error('ENOENT'); }),
+}));
+
+vi.mock('./fs-utils', () => ({
+  pathExists: vi.fn(async () => false),
+}));
+
 vi.mock('./log-service', () => ({
   appLog: vi.fn(),
 }));
@@ -37,6 +51,8 @@ vi.mock('./git-exclude-manager', () => ({
 }));
 
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
+import { pathExists } from './fs-utils';
 import { computeConfigDiff, propagateChanges } from './config-diff-service';
 import type { DurableAgentConfig } from '../../shared/types';
 import type { OrchestratorProvider, OrchestratorConventions } from '../orchestrators/types';
@@ -81,22 +97,30 @@ const mockProvider: OrchestratorProvider = {
 };
 
 /**
- * Helper to configure fs.readFileSync mock responses based on file path patterns.
- * Each call to readFileSync returns data based on the path argument.
- * Patterns are sorted longest-first to avoid partial matches (e.g. settings.local.json before settings.json).
- * Also configures existsSync to return true for paths matching these patterns.
+ * Helper to configure fsp.readFile mock responses based on file path patterns.
+ * Each call to readFile returns data based on the path argument.
+ * Patterns are sorted longest-first to avoid partial matches.
+ * Also configures pathExists to return true for paths matching these patterns.
  */
 function mockFileSystem(files: Record<string, string>): void {
   const sortedEntries = Object.entries(files).sort(
     ([a], [b]) => b.length - a.length,
   );
-  vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+  vi.mocked(fsp.readFile).mockImplementation(async (p: unknown) => {
     const filePath = String(p);
     for (const [pattern, content] of sortedEntries) {
       if (filePath.includes(pattern)) return content;
     }
     throw new Error('ENOENT');
   });
+  vi.mocked(pathExists).mockImplementation(async (p: unknown) => {
+    const filePath = String(p);
+    for (const [pattern] of sortedEntries) {
+      if (filePath.includes(pattern)) return true;
+    }
+    return false;
+  });
+  // Also keep fs.existsSync for any transitively-used sync code
   vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
     const filePath = String(p);
     for (const [pattern] of sortedEntries) {
@@ -134,6 +158,9 @@ describe('config-diff-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearAgentConfigCache();
+    vi.mocked(fsp.readFile).mockRejectedValue(new Error('ENOENT'));
+    vi.mocked(fsp.readdir).mockResolvedValue([]);
+    vi.mocked(pathExists).mockResolvedValue(false);
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readdirSync).mockReturnValue([]);
   });
@@ -345,8 +372,8 @@ describe('config-diff-service', () => {
       });
       vi.mocked(mockProvider.readInstructions).mockReturnValue('');
 
-      // Override existsSync to handle agents.json + SKILL.md checks
-      vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      // Override pathExists to handle agents.json + SKILL.md checks
+      vi.mocked(pathExists).mockImplementation(async (p: unknown) => {
         const filePath = String(p);
         return filePath.includes('agents.json') || filePath.includes('README.md');
       });
@@ -359,7 +386,8 @@ describe('config-diff-service', () => {
       });
 
       // Agent has a skill in its worktree, project has none
-      vi.mocked(fs.readdirSync).mockImplementation((p: unknown) => {
+      // listSkills uses fsp.readdir
+      vi.mocked(fsp.readdir).mockImplementation(async (p: unknown) => {
         const dirPath = String(p);
         if (dirPath.includes('bold-falcon') && dirPath.includes('skills')) {
           return [{ name: 'custom-skill', isDirectory: () => true, isFile: () => false }] as any;
@@ -407,8 +435,8 @@ describe('config-diff-service', () => {
       expect(result.ok).toBe(true);
       expect(result.propagatedCount).toBe(1);
 
-      // Verify fs.promises.writeFile was called with updated settings
-      const writeCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      // Verify fsp.writeFile was called with updated settings
+      const writeCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => String(call[0]).includes('settings.json'),
       );
       expect(writeCall).toBeDefined();
@@ -438,7 +466,7 @@ describe('config-diff-service', () => {
       expect(result.ok).toBe(true);
       expect(result.propagatedCount).toBe(1);
 
-      const writeCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      const writeCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => String(call[0]).includes('settings.json'),
       );
       expect(writeCall).toBeDefined();
@@ -467,7 +495,7 @@ describe('config-diff-service', () => {
       expect(result.ok).toBe(true);
       expect(result.propagatedCount).toBe(1);
 
-      const writeCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      const writeCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => String(call[0]).includes('settings.json'),
       );
       expect(writeCall).toBeDefined();

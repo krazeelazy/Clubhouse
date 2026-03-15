@@ -5,15 +5,23 @@ vi.mock('child_process', () => ({
   execFile: vi.fn(),
 }));
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  promises: {
-    readFile: vi.fn(),
-    unlink: vi.fn(),
-  },
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    promises: {
+      readFile: vi.fn(),
+      unlink: vi.fn(),
+    },
+  };
+});
+
+vi.mock('./fs-utils', () => ({
+  pathExists: vi.fn(),
 }));
 
 import * as fs from 'fs';
+import { pathExists } from './fs-utils';
 import { execFile } from 'child_process';
 import { getGitInfo, checkout, commit, push, pull, getFileDiff, stage, unstage, stageAll, unstageAll, discardFile, createBranch, stash, stashPop } from './git-service';
 
@@ -72,7 +80,7 @@ describe('getGitInfo', () => {
   });
 
   it('no .git returns hasGit:false and empty fields', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(pathExists).mockResolvedValue(false);
     const info = await getGitInfo(DIR);
     expect(info.hasGit).toBe(false);
     expect(info.branch).toBe('');
@@ -84,7 +92,7 @@ describe('getGitInfo', () => {
   });
 
   it('parses branch from rev-parse', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'rev-parse': 'feature/my-branch\n',
       'branch --no-color': '  main\n* feature/my-branch\n',
@@ -94,7 +102,7 @@ describe('getGitInfo', () => {
   });
 
   it('parses git branch --no-color list, strips * prefix', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'branch --no-color': '* main\n  develop\n  feature/x\n',
     });
@@ -103,7 +111,7 @@ describe('getGitInfo', () => {
   });
 
   it('parses porcelain status — staged, unstaged, untracked', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'M  staged.ts\n M unstaged.ts\n?? new.ts\n',
     });
@@ -115,7 +123,7 @@ describe('getGitInfo', () => {
   });
 
   it('parses ||| delimited log into GitLogEntry', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'log': 'abc123|||abc|||Fix bug|||Author|||2 hours ago\n',
     });
@@ -131,7 +139,7 @@ describe('getGitInfo', () => {
   });
 
   it('calculates ahead/behind from rev-list', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'remote': 'origin\n',
       'rev-list': '3\t5\n',
@@ -143,7 +151,7 @@ describe('getGitInfo', () => {
   });
 
   it('no remote returns ahead:0, behind:0', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({ 'remote': '\n' });
     const info = await getGitInfo(DIR);
     expect(info.ahead).toBe(0);
@@ -151,7 +159,7 @@ describe('getGitInfo', () => {
   });
 
   it('uses -uall flag to enumerate files inside untracked directories', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitExec((args) => {
       const argsStr = args.join(' ');
       if (argsStr.includes('status')) {
@@ -173,7 +181,7 @@ describe('getGitInfo', () => {
   });
 
   it('parses nested directory paths for modified files', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'M  src/components/Header.tsx\n M src/utils/helpers/format.ts\nA  src/pages/new/Dashboard.tsx\n',
     });
@@ -185,7 +193,7 @@ describe('getGitInfo', () => {
   });
 
   it('handles renamed files with arrow syntax', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'R  old-name.ts -> new-name.ts\n',
     });
@@ -197,7 +205,7 @@ describe('getGitInfo', () => {
   });
 
   it('handles mix of staged adds in new dirs and unstaged modifications', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'A  lib/new-module/index.ts\nA  lib/new-module/helper.ts\n M src/app.ts\n?? docs/notes.md\n',
     });
@@ -213,7 +221,7 @@ describe('getGitInfo', () => {
   });
 
   it('empty status returns empty array, not parse artifacts', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec();
     const info = await getGitInfo(DIR);
     expect(info.status).toEqual([]);
@@ -247,7 +255,7 @@ describe('push', () => {
   });
 
   it('returns ok:false when no remote', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({ 'remote': '\n' });
     const result = await push(DIR);
     expect(result.ok).toBe(false);
@@ -261,7 +269,7 @@ describe('pull', () => {
   });
 
   it('returns ok:false when no remote', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({ 'remote': '\n' });
     const result = await pull(DIR);
     expect(result.ok).toBe(false);
@@ -495,7 +503,7 @@ describe('getGitInfo — rename parsing', () => {
   });
 
   it('splits rename into path and origPath', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'R  src/old.ts -> src/new.ts\n',
     });
@@ -507,7 +515,7 @@ describe('getGitInfo — rename parsing', () => {
   });
 
   it('splits copy into path and origPath', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'C  base.ts -> copy.ts\n',
     });
@@ -524,7 +532,7 @@ describe('getGitInfo — conflict detection', () => {
   });
 
   it('sets hasConflicts=true when UU status present', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'UU src/conflict.ts\n M src/ok.ts\n',
     });
@@ -534,7 +542,7 @@ describe('getGitInfo — conflict detection', () => {
   });
 
   it('detects AA (both-added) as conflict', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'AA both-added.ts\n',
     });
@@ -543,7 +551,7 @@ describe('getGitInfo — conflict detection', () => {
   });
 
   it('hasConflicts=false when no conflict codes', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'status --porcelain': 'M  file.ts\n?? new.ts\n',
     });
@@ -558,7 +566,7 @@ describe('getGitInfo — stash count', () => {
   });
 
   it('counts stash entries', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'stash': 'stash@{0}: WIP on main\nstash@{1}: WIP on feature\n',
     });
@@ -567,7 +575,7 @@ describe('getGitInfo — stash count', () => {
   });
 
   it('returns stashCount=0 when no stashes', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec();
     const info = await getGitInfo(DIR);
     expect(info.stashCount).toBe(0);
@@ -620,7 +628,7 @@ describe('push — success case', () => {
   });
 
   it('pushes to remote branch and returns ok:true', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     let pushCalled = false;
     mockGitExec((args) => {
       const argsStr = args.join(' ');
@@ -643,7 +651,7 @@ describe('push — success case', () => {
   });
 
   it('returns error message when push command fails', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitExec((args) => {
       const argsStr = args.join(' ');
       if (argsStr.includes('push')) {
@@ -672,7 +680,7 @@ describe('pull — success case', () => {
   });
 
   it('pulls from remote branch and returns ok:true', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     let pullCalled = false;
     mockGitExec((args) => {
       const argsStr = args.join(' ');
@@ -695,7 +703,7 @@ describe('pull — success case', () => {
   });
 
   it('returns error when pull has merge conflicts', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitExec((args) => {
       const argsStr = args.join(' ');
       if (argsStr.includes('pull')) {
@@ -870,7 +878,7 @@ describe('getGitInfo — command failure resilience', () => {
   });
 
   it('returns HEAD when rev-parse fails', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitExec((args) => {
       const argsStr = args.join(' ');
       if (argsStr.includes('rev-parse')) throw new Error('fatal');
@@ -886,7 +894,7 @@ describe('getGitInfo — command failure resilience', () => {
   });
 
   it('returns empty branches when git branch fails', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitExec((args) => {
       const argsStr = args.join(' ');
       if (argsStr.includes('rev-parse')) return 'main\n';
@@ -902,7 +910,7 @@ describe('getGitInfo — command failure resilience', () => {
   });
 
   it('handles multiple log entries', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     mockGitInfoExec({
       'log': 'aaa|||aa|||First commit|||Alice|||1 hour ago\nbbb|||bb|||Second commit|||Bob|||2 hours ago\nccc|||cc|||Third commit|||Charlie|||3 hours ago\n',
     });
@@ -913,7 +921,7 @@ describe('getGitInfo — command failure resilience', () => {
   });
 
   it('detects all conflict codes: DD, AU, UD, UA, DU', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(pathExists).mockResolvedValue(true);
     const conflictCodes = ['DD', 'AU', 'UD', 'UA', 'DU'];
     for (const code of conflictCodes) {
       mockGitInfoExec({

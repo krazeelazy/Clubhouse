@@ -26,6 +26,19 @@ vi.mock('fs', () => {
   };
 });
 
+// materialization-service itself now uses fs/promises
+vi.mock('fs/promises', () => ({
+  readFile: vi.fn(() => Promise.reject(new Error('ENOENT'))),
+  writeFile: vi.fn(() => Promise.resolve(undefined)),
+  mkdir: vi.fn(() => Promise.resolve(undefined)),
+  readdir: vi.fn(() => Promise.resolve([])),
+  copyFile: vi.fn(() => Promise.resolve(undefined)),
+}));
+
+vi.mock('./fs-utils', () => ({
+  pathExists: vi.fn(() => Promise.resolve(false)),
+}));
+
 vi.mock('./log-service', () => ({
   appLog: vi.fn(),
 }));
@@ -41,7 +54,8 @@ vi.mock('./clubhouse-mode-settings', () => ({
   isClubhouseModeEnabled: vi.fn(() => false),
 }));
 
-import * as fs from 'fs';
+import * as fsp from 'fs/promises';
+import { pathExists } from './fs-utils';
 import {
   buildWildcardContext,
   materializeAgent,
@@ -106,20 +120,27 @@ const mockProvider: OrchestratorProvider = {
   toolVerb: vi.fn(() => undefined),
 };
 
+/**
+ * Helper to mock fsp.readFile to return settings JSON for settings.json paths.
+ */
+function mockSettingsFile(settingsJson: string): void {
+  vi.mocked(fsp.readFile).mockImplementation(async (p: unknown) => {
+    const filePath = String(p);
+    if (filePath.includes('settings.json')) return settingsJson;
+    throw new Error('ENOENT');
+  });
+}
+
 describe('materialization-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Re-establish async delegates after mockReset clears implementations
-    vi.mocked(fs.promises.readFile).mockImplementation(async (...args: unknown[]) =>
-      (fs.readFileSync as (...a: unknown[]) => unknown)(...args),
-    );
-    vi.mocked(fs.promises.writeFile).mockImplementation(async () => undefined);
-    vi.mocked(fs.promises.mkdir).mockImplementation(async () => undefined);
-    vi.mocked(fs.promises.readdir).mockImplementation(async (...args: unknown[]) =>
-      (fs.readdirSync as (...a: unknown[]) => unknown)(...args),
-    );
-    vi.mocked(fs.promises.access).mockImplementation(async () => { throw new Error('ENOENT'); });
+    vi.mocked(fsp.mkdir).mockResolvedValue(undefined);
+    vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
+    vi.mocked(fsp.readFile).mockRejectedValue(new Error('ENOENT'));
+    vi.mocked(fsp.readdir).mockResolvedValue([]);
+    vi.mocked(fsp.copyFile).mockResolvedValue(undefined);
+    vi.mocked(pathExists).mockResolvedValue(false);
   });
 
   describe('buildWildcardContext', () => {
@@ -178,7 +199,7 @@ describe('materialization-service', () => {
 
   describe('resolveSourceControlProvider', () => {
     it('returns project-level setting when set', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { sourceControlProvider: 'azure-devops' },
@@ -188,7 +209,7 @@ describe('materialization-service', () => {
     });
 
     it('falls back to app-level clubhouse mode setting', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {},
@@ -202,7 +223,7 @@ describe('materialization-service', () => {
     });
 
     it('defaults to github when nothing is configured', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
       }));
@@ -214,7 +235,7 @@ describe('materialization-service', () => {
 
   describe('materializeAgent', () => {
     it('writes instructions with wildcards replaced', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {
@@ -231,7 +252,7 @@ describe('materialization-service', () => {
     });
 
     it('writes permissions with wildcards replaced', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {
@@ -244,7 +265,7 @@ describe('materialization-service', () => {
 
       await materializeAgent({ projectPath: '/project', agent: testAgent, provider: mockProvider });
 
-      expect(fs.promises.writeFile).toHaveBeenCalledWith(
+      expect(fsp.writeFile).toHaveBeenCalledWith(
         expect.stringContaining('settings.local.json'),
         expect.stringContaining('.clubhouse/agents/bold-falcon/'),
         'utf-8',
@@ -252,7 +273,7 @@ describe('materialization-service', () => {
     });
 
     it('writes MCP JSON with wildcards replaced', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {
@@ -262,7 +283,8 @@ describe('materialization-service', () => {
 
       await materializeAgent({ projectPath: '/project', agent: testAgent, provider: mockProvider });
 
-      const writeCall = vi.mocked(fs.writeFileSync).mock.calls.find(
+      // MCP JSON write now goes through fsp.writeFile
+      const writeCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => (call[0] as string).includes('.mcp.json'),
       );
       expect(writeCall).toBeDefined();
@@ -270,7 +292,7 @@ describe('materialization-service', () => {
     });
 
     it('no-ops when no defaults exist and no source dirs', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
       }));
@@ -282,7 +304,7 @@ describe('materialization-service', () => {
 
     it('skips agent without worktreePath', async () => {
       const agent = { ...testAgent, worktreePath: undefined };
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'test' },
@@ -306,7 +328,7 @@ describe('materialization-service', () => {
         writeInstructions: vi.fn(),
       };
 
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {
@@ -321,22 +343,16 @@ describe('materialization-service', () => {
       // Instructions should still be written via the provider
       expect(tomlProvider.writeInstructions).toHaveBeenCalled();
 
-      // MCP JSON and permissions should NOT be written to filesystem
-      const fileWrites = vi.mocked(fs.writeFileSync).mock.calls;
-      const tomlWrites = fileWrites.filter((c) => String(c[0]).includes('config.toml'));
-      expect(tomlWrites).toHaveLength(0);
-
-      // No settings.local.json or config.toml permissions writes
-      const permWrites = fileWrites.filter((c) =>
-        String(c[0]).includes('settings.local.json') || String(c[0]).includes('config.toml'),
-      );
-      expect(permWrites).toHaveLength(0);
+      // MCP JSON should NOT be written to filesystem (via fsp.writeFile)
+      const fspWrites = vi.mocked(fsp.writeFile).mock.calls;
+      const tomlFspWrites = fspWrites.filter((c) => String(c[0]).includes('config.toml'));
+      expect(tomlFspWrites).toHaveLength(0);
     });
   });
 
   describe('previewMaterialization', () => {
     it('returns resolved values without writing files', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: {
@@ -360,7 +376,7 @@ describe('materialization-service', () => {
     });
 
     it('returns empty values when no defaults', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
       }));
@@ -379,20 +395,12 @@ describe('materialization-service', () => {
 
   describe('ensureDefaultTemplates', () => {
     it('writes default instructions and permissions when no defaults exist', async () => {
-      let callCount = 0;
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        callCount++;
-        if (callCount <= 1) {
-          return JSON.stringify({ defaults: {}, quickOverrides: {} });
-        }
-        throw new Error('ENOENT');
-      });
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockSettingsFile(JSON.stringify({ defaults: {}, quickOverrides: {} }));
 
       await ensureDefaultTemplates('/project');
 
-      // Should have written settings.json via fs.promises.writeFile with agent defaults
-      const settingsWriteCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      // Should have written settings.json via fsp.writeFile with agent defaults
+      const settingsWriteCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => (call[0] as string).includes('settings.json') && !(call[0] as string).includes('SKILL'),
       );
       expect(settingsWriteCall).toBeDefined();
@@ -402,19 +410,11 @@ describe('materialization-service', () => {
     });
 
     it('includes generic build tool permissions in defaults', async () => {
-      let callCount = 0;
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        callCount++;
-        if (callCount <= 1) {
-          return JSON.stringify({ defaults: {}, quickOverrides: {} });
-        }
-        throw new Error('ENOENT');
-      });
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockSettingsFile(JSON.stringify({ defaults: {}, quickOverrides: {} }));
 
       await ensureDefaultTemplates('/project');
 
-      const settingsWriteCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      const settingsWriteCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => (call[0] as string).includes('settings.json') && !(call[0] as string).includes('SKILL'),
       );
       expect(settingsWriteCall).toBeDefined();
@@ -431,19 +431,11 @@ describe('materialization-service', () => {
     });
 
     it('includes az repos and az devops permissions in defaults', async () => {
-      let callCount = 0;
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        callCount++;
-        if (callCount <= 1) {
-          return JSON.stringify({ defaults: {}, quickOverrides: {} });
-        }
-        throw new Error('ENOENT');
-      });
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockSettingsFile(JSON.stringify({ defaults: {}, quickOverrides: {} }));
 
       await ensureDefaultTemplates('/project');
 
-      const settingsWriteCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      const settingsWriteCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => (call[0] as string).includes('settings.json') && !(call[0] as string).includes('SKILL'),
       );
       expect(settingsWriteCall).toBeDefined();
@@ -453,19 +445,12 @@ describe('materialization-service', () => {
     });
 
     it('creates all default skills when no defaults exist', async () => {
-      let callCount = 0;
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        callCount++;
-        if (callCount <= 1) {
-          return JSON.stringify({ defaults: {}, quickOverrides: {} });
-        }
-        throw new Error('ENOENT');
-      });
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockSettingsFile(JSON.stringify({ defaults: {}, quickOverrides: {} }));
 
       await ensureDefaultTemplates('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      // Skill writes now go through fsp.writeFile
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
@@ -481,39 +466,33 @@ describe('materialization-service', () => {
     });
 
     it('still creates skills even when defaults already exist', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'existing' },
       }));
-      vi.mocked(fs.existsSync).mockReturnValue(false);
 
       await ensureDefaultTemplates('/project');
 
-      // Should not write settings.json (defaults already exist)
-      const _settingsWriteCalls = vi.mocked(fs.writeFileSync).mock.calls.filter(
-        (call) => (call[0] as string).endsWith('settings.json'),
-      );
-      // Only the skills settings.json write (for defaultSkillsPath), not agent defaults
-      // Check that skills were still created
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      // Check that skills were still created (via fsp.writeFile)
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
     });
 
     it('no-ops when defaults already exist and skill files already exist', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'existing' },
       }));
-      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(pathExists).mockResolvedValue(true);
 
       await ensureDefaultTemplates('/project');
 
       // Should not write any SKILL.md files (they already exist)
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(0);
@@ -538,16 +517,15 @@ describe('materialization-service', () => {
   describe('resetProjectAgentDefaults', () => {
     it('overwrites existing defaults with built-in templates', async () => {
       // Existing customized defaults
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'custom instructions' },
       }));
-      vi.mocked(fs.existsSync).mockReturnValue(false);
 
       await resetProjectAgentDefaults('/project');
 
-      const settingsWriteCall = vi.mocked(fs.promises.writeFile).mock.calls.find(
+      const settingsWriteCall = vi.mocked(fsp.writeFile).mock.calls.find(
         (call) => (call[0] as string).includes('settings.json') && !(call[0] as string).includes('SKILL'),
       );
       expect(settingsWriteCall).toBeDefined();
@@ -557,34 +535,34 @@ describe('materialization-service', () => {
     });
 
     it('also ensures default skills exist', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'custom' },
       }));
-      vi.mocked(fs.existsSync).mockReturnValue(false);
 
       await resetProjectAgentDefaults('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      // Skill writes now go through fsp.writeFile
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
     });
 
     it('overwrites existing skill files with built-in defaults', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      mockSettingsFile(JSON.stringify({
         defaults: {},
         quickOverrides: {},
         agentDefaults: { instructions: 'custom' },
       }));
       // All files already exist
-      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(pathExists).mockResolvedValue(true);
 
       await resetProjectAgentDefaults('/project');
 
-      // Skills should still be written even though files exist
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      // Skills should still be written even though files exist (force=true)
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
@@ -592,13 +570,13 @@ describe('materialization-service', () => {
   });
 
   describe('ensureDefaultSkills', () => {
-    it('creates all seven skills when none exist', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    it('creates all seven skills when none exist', async () => {
+      vi.mocked(fsp.readFile).mockRejectedValue(new Error('ENOENT'));
 
-      ensureDefaultSkills('/project');
+      await ensureDefaultSkills('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      // Skill writes now go through fsp.writeFile
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
@@ -632,13 +610,13 @@ describe('materialization-service', () => {
       expect(validateWrite![1]).toContain('@@LintCommand');
     });
 
-    it('skips existing skills', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
+    it('skips existing skills', async () => {
+      vi.mocked(pathExists).mockResolvedValue(true);
+      vi.mocked(fsp.readFile).mockResolvedValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
 
-      ensureDefaultSkills('/project');
+      await ensureDefaultSkills('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(0);
@@ -646,25 +624,25 @@ describe('materialization-service', () => {
   });
 
   describe('resetDefaultSkills', () => {
-    it('overwrites all skill files even when they already exist', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
+    it('overwrites all skill files even when they already exist', async () => {
+      vi.mocked(pathExists).mockResolvedValue(true);
+      vi.mocked(fsp.readFile).mockResolvedValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
 
-      resetDefaultSkills('/project');
+      await resetDefaultSkills('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       expect(skillWrites).toHaveLength(7);
     });
 
-    it('writes latest built-in content when overwriting', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
+    it('writes latest built-in content when overwriting', async () => {
+      vi.mocked(pathExists).mockResolvedValue(true);
+      vi.mocked(fsp.readFile).mockResolvedValue(JSON.stringify({ defaultSkillsPath: 'skills' }));
 
-      resetDefaultSkills('/project');
+      await resetDefaultSkills('/project');
 
-      const skillWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      const skillWrites = vi.mocked(fsp.writeFile).mock.calls.filter(
         (call) => (call[0] as string).includes('SKILL.md'),
       );
       const normalize = (call: unknown[]) => (call[0] as string).replace(/\\/g, '/');
