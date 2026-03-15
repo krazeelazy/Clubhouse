@@ -53,7 +53,7 @@ vi.mock('./fs-utils', () => ({
 }));
 
 import * as fsp from 'fs/promises';
-import { exec, execFile, execSync } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { pathExists } from './fs-utils';
 import {
   listDurable,
@@ -397,10 +397,8 @@ describe('createDurable', () => {
 
   it('uses async exec (non-blocking) for git operations', async () => {
     await createDurable(PROJECT_PATH, 'async-test', 'indigo');
-    // Verify async exec was used (not execSync) for git operations
+    // Verify async exec was used for git operations
     expect(vi.mocked(exec)).toHaveBeenCalled();
-    // execSync should NOT be called by createDurable for worktree operations
-    expect(vi.mocked(execSync)).not.toHaveBeenCalled();
   });
 });
 
@@ -436,7 +434,7 @@ describe('deleteDurable', () => {
     expect(result[0].id).toBe('durable_keep');
   });
 
-  it('calls git worktree remove + branch -D', async () => {
+  it('calls git worktree remove + branch -D via async exec', async () => {
     const agents = [{ id: 'durable_git', name: 'git', color: 'indigo', branch: 'git/standby', worktreePath: '/test/wt', createdAt: '2024-01-01' }];
     vi.mocked(pathExists).mockImplementation(async (p: any) => {
       const s = String(p);
@@ -753,7 +751,7 @@ describe('getWorktreeStatus', () => {
 });
 
 describe('deleteCommitAndPush', () => {
-  it('stages, commits, pushes, deletes', async () => {
+  it('stages, commits, pushes, deletes via async exec', async () => {
     const agents = [{ id: 'durable_dcp', name: 'dcp', color: 'indigo', branch: 'dcp/standby', worktreePath: '/test/wt', createdAt: '2024-01-01' }];
     vi.mocked(pathExists).mockImplementation(async (p: any) => {
       const s = String(p);
@@ -764,21 +762,19 @@ describe('deleteCommitAndPush', () => {
     vi.mocked(fsp.readFile).mockResolvedValue(JSON.stringify(agents));
     vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
     vi.mocked(fsp.mkdir).mockResolvedValue(undefined);
-    vi.mocked(execSync).mockImplementation((cmd: any) => {
-      if (String(cmd).includes('git remote')) return 'origin\n';
-      return '';
-    });
-    vi.mocked(execFile).mockImplementation((_file: any, _args: any, _opts: any, cb: any) => {
-      cb(null, '', '');
+    vi.mocked(execFile).mockImplementation((_file: any, args: any, _opts: any, cb: any) => {
+      const argsStr = args.join(' ');
+      if (argsStr.includes('remote')) cb(null, 'origin\n', '');
+      else cb(null, '', '');
       return {} as any;
     });
 
     const result = await deleteCommitAndPush(PROJECT_PATH, 'durable_dcp');
     expect(result.ok).toBe(true);
-    const calls = vi.mocked(execSync).mock.calls.map((c) => String(c[0]));
-    expect(calls.some((c) => c.includes('git add -A'))).toBe(true);
-    expect(calls.some((c) => c.includes('git commit'))).toBe(true);
-    expect(calls.some((c) => c.includes('git push'))).toBe(true);
+    const calls = vi.mocked(execFile).mock.calls.map((c) => (c[1] as string[]).join(' '));
+    expect(calls.some((c) => c.includes('add -A'))).toBe(true);
+    expect(calls.some((c) => c.includes('commit'))).toBe(true);
+    expect(calls.some((c) => c.includes('push'))).toBe(true);
   });
 
   it('agent not found returns ok:false', async () => {
@@ -806,7 +802,7 @@ describe('deleteUnregister', () => {
     expect(remaining.length).toBe(0);
     // No rm or git commands
     expect(vi.mocked(fsp.rm)).not.toHaveBeenCalled();
-    expect(vi.mocked(execSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(execFile)).not.toHaveBeenCalled();
   });
 });
 
@@ -822,7 +818,7 @@ describe('deleteForce', () => {
     vi.mocked(fsp.readFile).mockResolvedValue(JSON.stringify(agents));
     vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
     vi.mocked(fsp.mkdir).mockResolvedValue(undefined);
-    vi.mocked(execSync).mockReturnValue('');
+    vi.mocked(execFile).mockImplementation((_file: any, _args: any, _opts: any, cb: any) => { cb(null, '', ''); return {} as any; });
 
     const result = await deleteForce(PROJECT_PATH, 'durable_force');
     expect(result.ok).toBe(true);

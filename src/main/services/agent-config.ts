@@ -1,4 +1,4 @@
-import { exec, execFile, execSync } from 'child_process';
+import { exec, execFile } from 'child_process';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { app } from 'electron';
@@ -637,18 +637,18 @@ export async function deleteCommitAndPush(projectPath: string, agentId: string):
 
   try {
     // Stage all and commit
-    execSync('git add -A', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+    await execGitFileAsync(['add', '-A'], wt);
     try {
-      execSync('git commit -m "Save work before deletion"', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      await execGitFileAsync(['commit', '-m', 'Save work before deletion'], wt);
     } catch {
       // Nothing to commit is OK
     }
 
     // Push if remote exists
     try {
-      const remoteOut = execSync('git remote', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      const remoteOut = await execGitFileAsync(['remote'], wt);
       if (remoteOut.trim() && agent.branch) {
-        execSync(`git push -u origin "${agent.branch}"`, { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+        await execGitFileAsync(['push', '-u', 'origin', agent.branch], wt);
       }
     } catch (pushErr) {
       appLog('core:agent-config', 'warn', 'Push failed during delete-commit-push, work saved locally', {
@@ -682,25 +682,25 @@ export async function deleteWithCleanupBranch(projectPath: string, agentId: stri
   try {
     // Create and checkout cleanup branch
     try {
-      execSync(`git checkout -b "${cleanupBranch}"`, { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      await execGitFileAsync(['checkout', '-b', cleanupBranch], wt);
     } catch {
       // Branch may exist, try just checking out
-      execSync(`git checkout "${cleanupBranch}"`, { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      await execGitFileAsync(['checkout', cleanupBranch], wt);
     }
 
     // Stage all and commit
-    execSync('git add -A', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+    await execGitFileAsync(['add', '-A'], wt);
     try {
-      execSync('git commit -m "Cleanup: save work before agent deletion"', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      await execGitFileAsync(['commit', '-m', 'Cleanup: save work before agent deletion'], wt);
     } catch {
       // Nothing to commit
     }
 
     // Push if remote exists
     try {
-      const remoteOut = execSync('git remote', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      const remoteOut = await execGitFileAsync(['remote'], wt);
       if (remoteOut.trim()) {
-        execSync(`git push -u origin "${cleanupBranch}"`, { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+        await execGitFileAsync(['push', '-u', 'origin', cleanupBranch], wt);
       }
     } catch (pushErr) {
       appLog('core:agent-config', 'warn', 'Push failed during cleanup-branch deletion, work saved locally', {
@@ -734,9 +734,11 @@ export async function deleteSaveAsPatch(projectPath: string, agentId: string, sa
   try {
     let patchContent = '';
 
+    const largeBuffer = 50 * 1024 * 1024;
+
     // Get diff of uncommitted changes
     try {
-      const diff = execSync('git diff HEAD', { cwd: wt, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 });
+      const diff = await execGitFileAsync(['diff', 'HEAD'], wt, largeBuffer);
       if (diff.trim()) {
         patchContent += `# Uncommitted changes\n${diff}\n`;
       }
@@ -746,16 +748,16 @@ export async function deleteSaveAsPatch(projectPath: string, agentId: string, sa
 
     // Get untracked files diff
     try {
-      const untracked = execSync('git ls-files --others --exclude-standard', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+      const untracked = await execGitFileAsync(['ls-files', '--others', '--exclude-standard'], wt);
       if (untracked.trim()) {
         // Stage untracked so we can diff them
-        execSync('git add -A', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
-        const stagedDiff = execSync('git diff --cached', { cwd: wt, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 });
+        await execGitFileAsync(['add', '-A'], wt);
+        const stagedDiff = await execGitFileAsync(['diff', '--cached'], wt, largeBuffer);
         if (stagedDiff.trim()) {
           patchContent += `# Staged changes (including untracked)\n${stagedDiff}\n`;
         }
         // Reset staging
-        execSync('git reset HEAD', { cwd: wt, encoding: 'utf-8', stdio: 'pipe' });
+        await execGitFileAsync(['reset', 'HEAD'], wt);
       }
     } catch {
       // ignore
@@ -763,9 +765,10 @@ export async function deleteSaveAsPatch(projectPath: string, agentId: string, sa
 
     // Get format-patch for committed but not in base
     try {
-      const patches = execSync(
-        `git format-patch ${base}..HEAD --stdout`,
-        { cwd: wt, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 }
+      const patches = await execGitFileAsync(
+        ['format-patch', `${base}..HEAD`, '--stdout'],
+        wt,
+        largeBuffer,
       );
       if (patches.trim()) {
         patchContent += `# Commits since ${base}\n${patches}\n`;
