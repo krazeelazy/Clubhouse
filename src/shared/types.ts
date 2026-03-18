@@ -426,7 +426,7 @@ export interface SoundSettings {
   }>;
 }
 
-export type SettingsSubPage = 'project' | 'notifications' | 'sounds' | 'logging' | 'display' | 'orchestrators' | 'profiles' | 'plugins' | 'plugin-detail' | 'about' | 'updates' | 'whats-new' | 'getting-started' | 'keyboard-shortcuts' | 'annex' | 'experimental';
+export type SettingsSubPage = 'project' | 'notifications' | 'sounds' | 'logging' | 'display' | 'orchestrators' | 'profiles' | 'plugins' | 'plugin-detail' | 'about' | 'updates' | 'whats-new' | 'getting-started' | 'keyboard-shortcuts' | 'annex' | 'annex-control' | 'experimental';
 
 // --- Experimental settings ---
 
@@ -440,6 +440,14 @@ export interface ExperimentalSettings {
 export interface AnnexSettings {
   enabled: boolean;
   deviceName: string;
+  /** Display alias for this instance (defaults to os.hostname()) */
+  alias: string;
+  /** Icon identifier for this instance (defaults to 'computer') */
+  icon: string;
+  /** Color identifier from AGENT_COLORS palette (defaults to 'indigo') */
+  color: string;
+  /** Whether to auto-reconnect to satellites after disconnection */
+  autoReconnect: boolean;
 }
 
 export interface AnnexStatus {
@@ -447,6 +455,64 @@ export interface AnnexStatus {
   port: number;
   pin: string;
   connectedCount: number;
+  /** SHA-256 fingerprint of this instance's public key (colon-separated hex) */
+  fingerprint: string;
+  /** Display alias for this instance */
+  alias: string;
+  /** Icon identifier */
+  icon: string;
+  /** Color identifier */
+  color: string;
+}
+
+// ── Annex peer types ──────────────────────────────────────────────────
+
+export interface AnnexPeer {
+  /** SHA-256 fingerprint of the peer's public key */
+  fingerprint: string;
+  /** Base64-encoded Ed25519 public key (DER/SPKI) */
+  publicKey: string;
+  /** Display alias */
+  alias: string;
+  /** Icon identifier */
+  icon: string;
+  /** Color identifier */
+  color: string;
+  /** ISO timestamp of when the pairing was established */
+  pairedAt: string;
+  /** ISO timestamp of last successful connection */
+  lastSeen: string;
+}
+
+// ── Annex client (controller) types ───────────────────────────────────
+
+export type SatelliteConnectionState = 'disconnected' | 'discovering' | 'connecting' | 'connected';
+
+export interface SatelliteConnection {
+  id: string;
+  alias: string;
+  icon: string;
+  color: string;
+  fingerprint: string;
+  state: SatelliteConnectionState;
+  host: string;
+  mainPort: number;
+  pairingPort: number;
+  snapshot: SatelliteSnapshot | null;
+  lastError: string | null;
+}
+
+export interface SatelliteSnapshot {
+  projects: Project[];
+  agents: Record<string, Agent[]>;
+  quickAgents: Record<string, unknown[]>;
+  theme: unknown;
+  orchestrators: unknown;
+  pendingPermissions: unknown[];
+  lastSeq: number;
+  plugins?: unknown[];
+  agentsMeta?: unknown;
+  protocolVersion?: number;
 }
 
 // --- Auto-update types ---

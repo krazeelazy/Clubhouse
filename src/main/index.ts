@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor } from 'electron';
 import { registerAllHandlers } from './ipc';
 import { killAll, startStaleSweep as startPtyStaleSweep, stopStaleSweep as stopPtyStaleSweep } from './services/pty-manager';
 import { cleanupWatchesForWindow, stopAllWatches } from './services/file-watch-service';
@@ -16,6 +16,13 @@ import { flushAllPending as flushPendingBroadcasts } from './util/ipc-broadcast'
 import { flushAllAgentConfigs } from './services/agent-config';
 import { preWarmShellEnvironment } from './util/shell';
 import { initializeRipgrep } from './services/search-service';
+
+// Allow overriding userData path for running multiple isolated instances (e.g. testing,
+// dual-instance Annex V2 workflows). Must be set before app.name so that any early
+// app.getPath('userData') calls after 'ready' resolve to the custom directory.
+if (process.env.CLUBHOUSE_USER_DATA) {
+  app.setPath('userData', process.env.CLUBHOUSE_USER_DATA);
+}
 
 // Set the app name early so the dock, menu bar, and notifications all say "Clubhouse"
 // instead of "Electron" during development.
@@ -124,6 +131,14 @@ app.on('ready', () => {
 
   registerAllHandlers();
   buildMenu();
+
+  // Resume satellite connections when the machine wakes from sleep
+  powerMonitor.on('resume', () => {
+    try {
+      const annexClient = require('./services/annex-client');
+      annexClient.resumeAllConnections();
+    } catch { /* annex client may not be loaded */ }
+  });
 
   appLog('core:startup', 'info', `Clubhouse v${app.getVersion()} starting`, {
     meta: {

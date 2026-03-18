@@ -25,12 +25,24 @@ import { initApp } from './app-initializer';
 import { initAppEventBridge } from './app-event-bridge';
 import { ToastContainer } from './components/ToastContainer';
 import { useToastStore } from './stores/toastStore';
+import { SatelliteLockOverlay } from './features/annex/SatelliteLockOverlay';
+import { useLockStore } from './stores/lockStore';
 
 export function App() {
   // ── Routing state (minimal selectors for view switching) ────────────────
   const projects = useProjectStore((s) => s.projects);
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const explorerTab = useUIStore((s) => s.explorerTab);
+
+  // ── Annex lock state (individual selectors to avoid reference-inequality re-render loops) ──
+  const lockLocked = useLockStore((s) => s.locked);
+  const lockPaused = useLockStore((s) => s.paused);
+  const lockControllerAlias = useLockStore((s) => s.controllerAlias);
+  const lockControllerIcon = useLockStore((s) => s.controllerIcon);
+  const lockControllerColor = useLockStore((s) => s.controllerColor);
+  const lockControllerFingerprint = useLockStore((s) => s.controllerFingerprint);
+  const lockTogglePause = useLockStore((s) => s.togglePause);
+  const lockUnlock = useLockStore((s) => s.unlock);
 
   // ── One-time initialization & event bridge ──────────────────────────────
   useEffect(() => {
@@ -107,14 +119,47 @@ export function App() {
     }
   }, [activeProjectId, projects]);
 
+  // ── Lock overlay action handlers ─────────────────────────────────────────
+  const handleLockDisconnect = () => {
+    if (lockControllerFingerprint) {
+      window.clubhouse.annex.disconnectController(lockControllerFingerprint);
+    }
+    lockUnlock();
+  };
+  const handleLockPause = () => {
+    lockTogglePause();
+  };
+  const handleLockDisableAndDisconnect = () => {
+    window.clubhouse.annex.disableAndDisconnect();
+    lockUnlock();
+  };
+
   // ── Derived routing state ──────────────────────────────────────────────
   const isAppPlugin = explorerTab.startsWith('plugin:app:');
   const isHelp = explorerTab === 'help';
   const isHome = activeProjectId === null && explorerTab !== 'settings' && !isAppPlugin && !isHelp;
 
+  // Lock overlay element (shared across all return paths)
+  const lockOverlay = (
+    <SatelliteLockOverlay
+      lockState={{
+        locked: lockLocked,
+        paused: lockPaused,
+        controllerAlias: lockControllerAlias,
+        controllerIcon: lockControllerIcon,
+        controllerColor: lockControllerColor,
+        controllerFingerprint: lockControllerFingerprint,
+      }}
+      onDisconnect={handleLockDisconnect}
+      onPause={handleLockPause}
+      onDisableAndDisconnect={handleLockDisableAndDisconnect}
+    />
+  );
+
   if (isHome) {
     return (
       <div className="h-screen w-screen overflow-hidden bg-ctp-base text-ctp-text flex flex-col">
+        {lockOverlay}
         <TitleBar />
         <PermissionViolationBanner />
         <UpdateBanner />
@@ -136,6 +181,7 @@ export function App() {
     const appPluginId = explorerTab.slice('plugin:app:'.length);
     return (
       <div className="h-screen w-screen overflow-hidden bg-ctp-base text-ctp-text flex flex-col">
+        {lockOverlay}
         <TitleBar />
         <PermissionViolationBanner />
         <UpdateBanner />
@@ -156,6 +202,7 @@ export function App() {
   if (isHelp) {
     return (
       <div className="h-screen w-screen overflow-hidden bg-ctp-base text-ctp-text flex flex-col">
+        {lockOverlay}
         <TitleBar />
         <PermissionViolationBanner />
         <UpdateBanner />
@@ -175,6 +222,7 @@ export function App() {
 
   return (
     <div className="h-screen w-screen overflow-hidden text-ctp-text flex flex-col">
+      {lockOverlay}
       <TitleBar />
       <PermissionViolationBanner />
       <UpdateBanner />

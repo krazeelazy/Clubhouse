@@ -1,9 +1,14 @@
 import * as http from 'http';
+import * as https from 'https';
+import * as tls from 'tls';
 import { randomInt, randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import * as annexTls from './annex-tls';
 import Bonjour, { Service } from 'bonjour-service';
 import * as annexEventBus from './annex-event-bus';
 import * as annexSettings from './annex-settings';
+import * as annexIdentity from './annex-identity';
+import * as annexPeers from './annex-peers';
 import * as projectStore from './project-store';
 import * as agentConfig from './agent-config';
 import * as ptyManager from './pty-manager';
@@ -33,13 +38,25 @@ import type {
 // Server state
 // ---------------------------------------------------------------------------
 
-let httpServer: http.Server | null = null;
+// Pairing port (plain HTTP): POST /pair, GET /api/v1/identity, OPTIONS
+let pairingServer: http.Server | null = null;
+let pairingPort = 0;
+
+// Main port (TLS with mTLS): all authenticated endpoints + WSS
+let tlsServer: https.Server | null = null;
+let httpServer: http.Server | null = null; // Legacy fallback — to be removed when mTLS is fully validated
 let wss: WebSocketServer | null = null;
 let bonjour: InstanceType<typeof Bonjour> | null = null;
 let bonjourService: Service | null = null;
-let serverPort = 0;
+let serverPort = 0; // Main TLS port
 let currentPin = '';
 const sessionTokens = new Set<string>();
+
+// Tag WebSocket connections with auth type for security gating
+type WsAuthType = 'bearer' | 'mtls';
+const wsAuthTypes = new WeakMap<WebSocket, WsAuthType>();
+// Track peer fingerprint per WebSocket connection (for mTLS connections)
+const wsPeerFingerprints = new WeakMap<WebSocket, string>();
 
 let unsubPtyData: (() => void) | null = null;
 let unsubHookEvent: (() => void) | null = null;
@@ -293,10 +310,25 @@ async function buildSnapshot(): Promise<object> {
     });
   }
 
+  // Build agents metadata (execution modes, detailed statuses)
+  const agentsMeta: Record<string, { executionMode: string | null; detailedStatus: AgentDetailedStatus | null }> = {};
+  for (const projectAgents of Object.values(agents)) {
+    for (const agent of projectAgents as Array<{ id: string; status: string; executionMode: string | null }>) {
+      if (agent.status === 'running') {
+        agentsMeta[agent.id] = {
+          executionMode: agent.executionMode,
+          detailedStatus: getDetailedStatus(agent.id),
+        };
+      }
+    }
+  }
+
   return {
+    protocolVersion: 2,
     projects,
     agents,
     quickAgents,
+    agentsMeta,
     theme: getThemeColors(),
     orchestrators: getOrchestratorsMap(),
     pendingPermissions: permissionQueue.listPending(),
@@ -717,7 +749,108 @@ async function handleStructuredPermissionResponse(
 }
 
 // ---------------------------------------------------------------------------
-// HTTP request handler
+// Pairing-port request handler (plain HTTP, unauthenticated)
+// ---------------------------------------------------------------------------
+
+async function handlePairingRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const url = req.url || '/';
+  const method = req.method || 'GET';
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
+  if (method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // GET /api/v1/identity — public identity info
+  if (method === 'GET' && url === '/api/v1/identity') {
+    const identity = annexIdentity.getPublicIdentity();
+    if (!identity) {
+      sendJson(res, 503, { error: 'identity_not_ready' });
+      return;
+    }
+    const settings = annexSettings.getSettings();
+    sendJson(res, 200, {
+      alias: settings.alias,
+      icon: settings.icon,
+      color: settings.color,
+      fingerprint: identity.fingerprint,
+      publicKey: identity.publicKey,
+    });
+    return;
+  }
+
+  // POST /pair — with brute-force protection
+  if (method === 'POST' && url === '/pair') {
+    const source = req.socket.remoteAddress || 'unknown';
+    const bruteCheck = annexPeers.checkBruteForce(source);
+
+    if (!bruteCheck.allowed) {
+      if (bruteCheck.locked) {
+        sendJson(res, 429, { error: 'pairing_locked', message: 'Too many failed attempts. Pairing is locked.' });
+      } else {
+        sendJson(res, 429, { error: 'rate_limited', retryAfterMs: bruteCheck.delayMs });
+      }
+      return;
+    }
+
+    readBody(req).then((raw) => {
+      const body = parseJsonBody(raw);
+      if (!body) { sendJson(res, 400, { error: 'invalid_json' }); return; }
+      const pin = body.pin;
+      if (typeof pin !== 'string') { sendJson(res, 400, { error: 'invalid_json' }); return; }
+
+      if (pin !== currentPin) {
+        annexPeers.recordFailedAttempt(source);
+        sendJson(res, 401, { error: 'invalid_pin' });
+        return;
+      }
+
+      annexPeers.recordSuccessfulAttempt(source);
+      const token = randomUUID();
+      sessionTokens.add(token);
+
+      const identity = annexIdentity.getOrCreateIdentity();
+      const settings = annexSettings.getSettings();
+
+      const clientPublicKey = body.publicKey as string | undefined;
+      if (clientPublicKey) {
+        annexPeers.addPeer({
+          fingerprint: annexIdentity.computeFingerprint(clientPublicKey),
+          publicKey: clientPublicKey,
+          alias: (body.alias as string) || 'Unknown',
+          icon: (body.icon as string) || 'computer',
+          color: (body.color as string) || 'indigo',
+          pairedAt: new Date().toISOString(),
+          lastSeen: new Date().toISOString(),
+        });
+      }
+
+      sendJson(res, 200, {
+        token,
+        publicKey: identity.publicKey,
+        alias: settings.alias,
+        icon: settings.icon,
+        color: settings.color,
+        fingerprint: identity.fingerprint,
+      });
+    }).catch((err) => {
+      appLog('core:annex', 'error', 'readBody failed', { meta: { error: err instanceof Error ? err.message : String(err) } });
+      res.writeHead(400);
+      res.end();
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not_found' });
+}
+
+// ---------------------------------------------------------------------------
+// Main-port request handler (serves authenticated endpoints)
 // ---------------------------------------------------------------------------
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -735,35 +868,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // POST /pair — no auth required
-  if (method === 'POST' && url === '/pair') {
-    readBody(req).then((raw) => {
-      const body = parseJsonBody(raw);
-      if (!body) {
-        sendJson(res, 400, { error: 'invalid_json' });
-        return;
-      }
-      const pin = body.pin;
-      if (typeof pin !== 'string') {
-        sendJson(res, 400, { error: 'invalid_json' });
-        return;
-      }
-      if (pin === currentPin) {
-        const token = randomUUID();
-        sessionTokens.add(token);
-        sendJson(res, 200, { token });
-      } else {
-        sendJson(res, 401, { error: 'invalid_pin' });
-      }
-    }).catch((err) => {
-      appLog('core:annex', 'error', 'readBody failed', { meta: { error: err instanceof Error ? err.message : String(err) } });
-      res.writeHead(400);
-      res.end();
-    });
-    return;
-  }
-
-  // All other endpoints require auth
+  // All endpoints on the main server require auth (mTLS or bearer token)
   const token = extractBearerToken(req);
   if (!isValidToken(token)) {
     sendJson(res, 401, { error: 'unauthorized' });
@@ -880,19 +985,23 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 // WebSocket message handler (Issue 8 — bidirectional)
 // ---------------------------------------------------------------------------
 
+const MAX_PTY_INPUT_SIZE = 64 * 1024; // 64KB
+
 function handleWsMessage(ws: WebSocket, data: string): void {
-  let msg: { type?: string; since?: number };
+  let msg: { type?: string; payload?: Record<string, unknown>; since?: number };
   try {
     msg = JSON.parse(data);
   } catch {
     return;
   }
 
-  if (msg.type === 'replay' && typeof msg.since === 'number') {
+  const type = msg.type;
+
+  // --- Replay (available to all authenticated connections) ---
+  if (type === 'replay' && typeof msg.since === 'number') {
     const events = eventReplay.getEventsSince(msg.since);
 
     if (events === null) {
-      // Gap — client's seq is too old for the buffer
       ws.send(JSON.stringify({
         type: 'replay:gap',
         oldestAvailable: eventReplay.getOldestSeq(),
@@ -918,6 +1027,145 @@ function handleWsMessage(ws: WebSocket, data: string): void {
     }
 
     ws.send(JSON.stringify({ type: 'replay:end' }));
+    return;
+  }
+
+  // --- Control messages (mTLS-only) ---
+  const authType = wsAuthTypes.get(ws);
+  const isMtls = authType === 'mtls';
+
+  if (!isMtls && (type === 'pty:input' || type === 'pty:resize' || type === 'agent:spawn' || type === 'agent:wake' || type === 'agent:kill')) {
+    ws.send(JSON.stringify({ type: 'error', payload: { message: 'Control messages require mTLS authentication' } }));
+    return;
+  }
+
+  const payload = msg.payload || {};
+
+  switch (type) {
+    case 'pty:input': {
+      const agentId = payload.agentId as string;
+      const inputData = payload.data as string;
+      if (!agentId || typeof inputData !== 'string') break;
+      if (inputData.length > MAX_PTY_INPUT_SIZE) {
+        ws.send(JSON.stringify({ type: 'error', payload: { message: 'pty:input data exceeds 64KB limit' } }));
+        break;
+      }
+      ptyManager.write(agentId, inputData);
+      break;
+    }
+
+    case 'pty:resize': {
+      const agentId = payload.agentId as string;
+      const cols = payload.cols as number;
+      const rows = payload.rows as number;
+      if (!agentId || typeof cols !== 'number' || typeof rows !== 'number') break;
+      ptyManager.resize(agentId, cols, rows);
+      break;
+    }
+
+    case 'agent:spawn': {
+      const projectId = payload.projectId as string;
+      const prompt = payload.prompt as string;
+      if (!projectId || !prompt) break;
+      // Reuse the quick agent spawn logic
+      findProjectById(projectId).then((project) => {
+        if (!project) {
+          ws.send(JSON.stringify({ type: 'error', payload: { message: 'project_not_found' } }));
+          return;
+        }
+        handleSpawnQuickAgentWs(ws, project, payload);
+      });
+      break;
+    }
+
+    case 'agent:wake': {
+      const agentId = payload.agentId as string;
+      const message = payload.message as string;
+      if (!agentId || !message) break;
+      handleWakeAgentWs(ws, agentId, message, payload.model as string | undefined);
+      break;
+    }
+
+    case 'agent:kill': {
+      const agentId = payload.agentId as string;
+      if (!agentId) break;
+      ptyManager.gracefulKill(agentId);
+      ws.send(JSON.stringify({ type: 'agent:kill:ack', payload: { agentId } }));
+      break;
+    }
+  }
+}
+
+// WS-based quick agent spawn (mirrors HTTP handler)
+async function handleSpawnQuickAgentWs(
+  ws: WebSocket,
+  project: Awaited<ReturnType<typeof findProjectById>> & {},
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const prompt = payload.prompt as string;
+  const parentAgentId = payload.parentAgentId as string | null;
+  const agentId = generateQuickAgentId();
+  const name = generateQuickName();
+  const model = payload.model as string | undefined;
+  const orchestrator = (payload.orchestrator as string) || project.orchestrator || 'claude-code';
+  const freeAgentMode = (payload.freeAgentMode as boolean) ?? false;
+
+  const tracked: TrackedQuickAgent = {
+    id: agentId, name, kind: 'quick', status: 'starting', prompt,
+    model: model || null, orchestrator, freeAgentMode,
+    parentAgentId: parentAgentId || null, projectId: project.id, spawnedAt: Date.now(),
+  };
+  trackedQuickAgents.set(agentId, tracked);
+
+  broadcastAndBuffer('agent:spawned', {
+    id: agentId, name, kind: 'quick', status: 'starting', prompt,
+    model: model || null, orchestrator, freeAgentMode, parentAgentId, projectId: project.id,
+  });
+
+  try {
+    await spawnAgent({
+      agentId, projectPath: project.path, cwd: project.path,
+      kind: 'quick', model, mission: prompt, orchestrator, freeAgentMode,
+    });
+    tracked.status = 'running';
+    broadcastToAllWindows(IPC.ANNEX.AGENT_SPAWNED, {
+      id: agentId, name, kind: 'quick', status: 'running', prompt,
+      model: model || null, orchestrator, freeAgentMode,
+      parentAgentId, projectId: project.id, headless: true,
+    });
+    ws.send(JSON.stringify({ type: 'agent:spawn:ack', payload: { id: agentId, name, status: 'starting' } }));
+  } catch (err) {
+    tracked.status = 'failed';
+    trackedQuickAgents.delete(agentId);
+    ws.send(JSON.stringify({ type: 'error', payload: { message: 'spawn_failed' } }));
+  }
+}
+
+// WS-based agent wake (mirrors HTTP handler)
+async function handleWakeAgentWs(ws: WebSocket, agentId: string, message: string, model?: string): Promise<void> {
+  const agentInfo = await findAgentAcrossProjects(agentId);
+  if (!agentInfo) {
+    ws.send(JSON.stringify({ type: 'error', payload: { message: 'agent_not_found' } }));
+    return;
+  }
+  if (ptyManager.isRunning(agentId) || isHeadlessAgent(agentId)) {
+    ws.send(JSON.stringify({ type: 'error', payload: { message: 'agent_already_running' } }));
+    return;
+  }
+  const { config, project } = agentInfo;
+  const agentModel = model || config.model;
+  const cwd = config.worktreePath || project.path;
+
+  try {
+    await spawnAgent({
+      agentId: config.id, projectPath: project.path, cwd,
+      kind: 'durable', model: agentModel, mission: message,
+      orchestrator: config.orchestrator, freeAgentMode: config.freeAgentMode,
+    });
+    broadcastAndBuffer('agent:woken', { agentId: config.id, message, source: 'annex-v2' });
+    ws.send(JSON.stringify({ type: 'agent:wake:ack', payload: { agentId: config.id, status: 'starting' } }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'error', payload: { message: 'wake_failed' } }));
   }
 }
 
@@ -926,15 +1174,39 @@ function handleWsMessage(ws: WebSocket, data: string): void {
 // ---------------------------------------------------------------------------
 
 export function start(): void {
-  if (httpServer) return;
+  if (tlsServer || httpServer) return;
+
+  // Generate identity on first enable (lazy creation)
+  const identity = annexIdentity.getOrCreateIdentity();
 
   currentPin = generatePin();
 
-  httpServer = http.createServer(handleRequest);
+  // --- Pairing server (plain HTTP) ---
+  pairingServer = http.createServer(handlePairingRequest);
+
+  // --- Main server (TLS with mTLS) ---
+  let tlsOptions: tls.TlsOptions;
+  try {
+    tlsOptions = annexTls.createTlsServerOptions(identity);
+    tlsServer = https.createServer(tlsOptions, handleRequest);
+  } catch (err) {
+    appLog('core:annex', 'warn', 'TLS server creation failed, falling back to plain HTTP', {
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
+    // Fallback: use plain HTTP for the main server (legacy/iOS compat)
+    tlsServer = null;
+  }
+
+  // If TLS failed, fall back to HTTP for the main server
+  const mainServer = tlsServer || http.createServer(handleRequest);
+  if (!tlsServer) {
+    httpServer = mainServer as http.Server;
+  }
 
   wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on('upgrade', (req, socket, head) => {
+  // WebSocket upgrade handler for the main server
+  mainServer.on('upgrade', (req: http.IncomingMessage, socket: any, head: Buffer) => {
     const urlObj = new URL(req.url || '/', `http://${req.headers.host}`);
 
     if (urlObj.pathname !== '/ws') {
@@ -942,14 +1214,34 @@ export function start(): void {
       return;
     }
 
-    const token = urlObj.searchParams.get('token');
-    if (!isValidToken(token || undefined)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
+    // Check auth: mTLS peer cert OR bearer token
+    let authType: WsAuthType = 'bearer';
+
+    let peerFingerprintForWs: string | undefined;
+    if (tlsServer && socket instanceof tls.TLSSocket) {
+      const peerFingerprint = annexTls.extractPeerFingerprint(socket);
+      if (peerFingerprint && annexPeers.isPairedPeer(peerFingerprint)) {
+        authType = 'mtls';
+        peerFingerprintForWs = peerFingerprint;
+        annexPeers.updateLastSeen(peerFingerprint);
+      }
+    }
+
+    if (authType !== 'mtls') {
+      // Fall back to bearer token auth
+      const token = urlObj.searchParams.get('token');
+      if (!isValidToken(token || undefined)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
     }
 
     wss!.handleUpgrade(req, socket, head, (ws) => {
+      wsAuthTypes.set(ws, authType);
+      if (peerFingerprintForWs) {
+        wsPeerFingerprints.set(ws, peerFingerprintForWs);
+      }
       wss!.emit('connection', ws, req);
     });
   });
@@ -958,9 +1250,40 @@ export function start(): void {
     // Send snapshot on connect
     ws.send(JSON.stringify({ type: 'snapshot', payload: await buildSnapshot() }));
 
+    // Broadcast lock state when an mTLS controller connects
+    const authType = wsAuthTypes.get(ws);
+    if (authType === 'mtls') {
+      const fingerprint = wsPeerFingerprints.get(ws);
+      const peer = fingerprint ? annexPeers.getPeer(fingerprint) : null;
+      broadcastToAllWindows(IPC.ANNEX.LOCK_STATE_CHANGED, {
+        locked: true,
+        controllerAlias: peer?.alias || 'Remote Controller',
+        controllerIcon: peer?.icon || '',
+        controllerColor: peer?.color || 'indigo',
+        controllerFingerprint: fingerprint || '',
+        remainingMs: 0,
+      });
+    }
+
     // Listen for client messages (replay requests)
     ws.on('message', (data) => {
       handleWsMessage(ws, data.toString());
+    });
+
+    // Broadcast unlock when mTLS controller disconnects
+    ws.on('close', () => {
+      if (authType === 'mtls') {
+        // Check if any other mTLS connections are still open
+        const hasMtlsClient = Array.from(wss?.clients || []).some(
+          (client) => client !== ws && client.readyState === WebSocket.OPEN && wsAuthTypes.get(client) === 'mtls',
+        );
+        if (!hasMtlsClient) {
+          broadcastToAllWindows(IPC.ANNEX.LOCK_STATE_CHANGED, {
+            locked: false,
+            remainingMs: 0,
+          });
+        }
+      }
     });
   });
 
@@ -972,33 +1295,25 @@ export function start(): void {
   });
 
   unsubHookEvent = annexEventBus.onHookEvent((agentId, event) => {
-    // Update detailed status cache
     detailedStatusCache.set(agentId, hookEventToDetailedStatus(event));
-
     broadcastAndBuffer('hook:event', { agentId, event });
   });
 
   unsubStructuredEvent = annexEventBus.onStructuredEvent((agentId, event) => {
-    // Update detailed status from structured events
     const status = structuredEventToDetailedStatus(event);
     if (status) {
       detailedStatusCache.set(agentId, status);
     }
-
     broadcastAndBuffer('structured:event', { agentId, event });
   });
 
   unsubPtyExit = annexEventBus.onPtyExit((agentId, exitCode) => {
-    // Clear detailed status for exited agent
     detailedStatusCache.delete(agentId);
-    // Clear pending permissions for exited agent
     permissionQueue.clearForAgent(agentId);
-    // Clear replay buffer events for this agent
     eventReplay.clearForAgent(agentId);
 
     broadcastAndBuffer('pty:exit', { agentId, exitCode });
 
-    // If this was a tracked quick agent, broadcast completion
     const tracked = trackedQuickAgents.get(agentId);
     if (tracked) {
       tracked.status = exitCode === 0 ? 'completed' : 'failed';
@@ -1010,10 +1325,7 @@ export function start(): void {
         projectId: tracked.projectId,
         parentAgentId: tracked.parentAgentId,
       });
-      // Remove from tracked list after a short delay (so clients can read the final state)
-      setTimeout(() => {
-        trackedQuickAgents.delete(agentId);
-      }, 60_000);
+      setTimeout(() => { trackedQuickAgents.delete(agentId); }, 60_000);
     }
   });
 
@@ -1021,7 +1333,6 @@ export function start(): void {
     broadcastAndBuffer('agent:spawned', { id: agentId, kind, projectId, ...meta });
   });
 
-  // Subscribe to permission requests from the queue
   unsubPermissionRequest = permissionQueue.onPermissionRequest((permission) => {
     broadcastAndBuffer('permission:request', {
       requestId: permission.requestId,
@@ -1034,35 +1345,54 @@ export function start(): void {
     });
   });
 
-  // Periodically evict stale replay buffer entries
-  staleEvictionInterval = setInterval(() => {
-    eventReplay.evictStale();
-  }, 60_000);
+  staleEvictionInterval = setInterval(() => { eventReplay.evictStale(); }, 60_000);
 
-  httpServer.listen(0, '0.0.0.0', () => {
-    const addr = httpServer?.address();
+  // Start both servers
+  let mainReady = false;
+  let pairingReady = false;
+
+  function publishBonjour() {
+    if (!mainReady || !pairingReady) return;
+    try {
+      bonjour = new Bonjour();
+      const settings = annexSettings.getSettings();
+      bonjourService = bonjour.publish({
+        name: settings.deviceName,
+        type: 'clubhouse-annex',
+        port: serverPort,
+        txt: {
+          v: '2',
+          pairingPort: String(pairingPort),
+          fingerprint: identity.fingerprint,
+        },
+      });
+      appLog('core:annex', 'info', 'mDNS service published (v2)', {
+        meta: { name: settings.deviceName, mainPort: serverPort, pairingPort },
+      });
+    } catch (err) {
+      appLog('core:annex', 'error', 'Failed to publish mDNS', {
+        meta: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }
+
+  mainServer.listen(0, '0.0.0.0', () => {
+    const addr = mainServer.address();
     if (addr && typeof addr === 'object') {
       serverPort = addr.port;
-      appLog('core:annex', 'info', `Annex server listening on 0.0.0.0:${serverPort}`);
+      appLog('core:annex', 'info', `Annex main server listening on 0.0.0.0:${serverPort} (${tlsServer ? 'TLS' : 'HTTP'})`);
+      mainReady = true;
+      publishBonjour();
+    }
+  });
 
-      // Publish mDNS
-      try {
-        bonjour = new Bonjour();
-        const settings = annexSettings.getSettings();
-        bonjourService = bonjour.publish({
-          name: settings.deviceName,
-          type: 'clubhouse-annex',
-          port: serverPort,
-          txt: { v: '1' },
-        });
-        appLog('core:annex', 'info', 'mDNS service published', {
-          meta: { name: settings.deviceName, port: serverPort },
-        });
-      } catch (err) {
-        appLog('core:annex', 'error', 'Failed to publish mDNS', {
-          meta: { error: err instanceof Error ? err.message : String(err) },
-        });
-      }
+  pairingServer.listen(0, '0.0.0.0', () => {
+    const addr = pairingServer?.address();
+    if (addr && typeof addr === 'object') {
+      pairingPort = addr.port;
+      appLog('core:annex', 'info', `Annex pairing server listening on 0.0.0.0:${pairingPort} (HTTP)`);
+      pairingReady = true;
+      publishBonjour();
     }
   });
 }
@@ -1108,13 +1438,22 @@ export function stop(): void {
     bonjour = null;
   }
 
-  // Close HTTP server
+  // Close servers
+  if (tlsServer) {
+    tlsServer.close();
+    tlsServer = null;
+  }
   if (httpServer) {
     httpServer.close();
     httpServer = null;
   }
+  if (pairingServer) {
+    pairingServer.close();
+    pairingServer = null;
+  }
 
   serverPort = 0;
+  pairingPort = 0;
   currentPin = '';
   sessionTokens.clear();
   detailedStatusCache.clear();
@@ -1125,12 +1464,20 @@ export function stop(): void {
   appLog('core:annex', 'info', 'Annex server stopped');
 }
 
-export function getStatus(): AnnexStatus {
+export function getStatus(): AnnexStatus & { pairingPort: number; tlsEnabled: boolean } {
+  const settings = annexSettings.getSettings();
+  const identity = annexIdentity.getPublicIdentity();
   return {
     advertising: !!bonjourService,
     port: serverPort,
     pin: currentPin,
     connectedCount: wss ? wss.clients.size : 0,
+    fingerprint: identity?.fingerprint || '',
+    alias: settings.alias,
+    icon: settings.icon,
+    color: settings.color,
+    pairingPort,
+    tlsEnabled: !!tlsServer,
   };
 }
 
@@ -1148,4 +1495,20 @@ export function regeneratePin(): void {
       try { client.close(); } catch { /* ignore */ }
     }
   }
+}
+
+/** Disconnect a specific peer's WebSocket connection by fingerprint. */
+export function disconnectPeer(fingerprint: string): void {
+  appLog('core:annex', 'info', `disconnectPeer called`, { meta: { fingerprint } });
+  if (!wss) return;
+  for (const client of wss.clients) {
+    if (wsPeerFingerprints.get(client) === fingerprint) {
+      try { client.close(1000, 'disconnected_by_satellite'); } catch { /* ignore */ }
+    }
+  }
+}
+
+/** Get the auth type of a WebSocket connection. Used by protocol V2 to gate control messages. */
+export function getWsAuthType(ws: WebSocket): WsAuthType {
+  return wsAuthTypes.get(ws) || 'bearer';
 }

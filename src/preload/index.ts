@@ -726,7 +726,7 @@ const api = {
   annex: {
     getSettings: () =>
       ipcRenderer.invoke(IPC.ANNEX.GET_SETTINGS),
-    saveSettings: (settings: { enabled: boolean; deviceName: string }) =>
+    saveSettings: (settings: { enabled: boolean; deviceName: string; alias: string; icon: string; color: string }) =>
       ipcRenderer.invoke(IPC.ANNEX.SAVE_SETTINGS, settings),
     getStatus: () =>
       ipcRenderer.invoke(IPC.ANNEX.GET_STATUS),
@@ -737,6 +737,10 @@ const api = {
       port: number;
       pin: string;
       connectedCount: number;
+      fingerprint: string;
+      alias: string;
+      icon: string;
+      color: string;
     }) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, s: any) => callback(s);
       ipcRenderer.on(IPC.ANNEX.STATUS_CHANGED, listener);
@@ -758,6 +762,71 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, agent: any) => callback(agent);
       ipcRenderer.on(IPC.ANNEX.AGENT_SPAWNED, listener);
       return () => { ipcRenderer.removeListener(IPC.ANNEX.AGENT_SPAWNED, listener); };
+    },
+    listPeers: () =>
+      ipcRenderer.invoke(IPC.ANNEX.LIST_PEERS),
+    removePeer: (fingerprint: string) =>
+      ipcRenderer.invoke(IPC.ANNEX.REMOVE_PEER, fingerprint),
+    removeAllPeers: () =>
+      ipcRenderer.invoke(IPC.ANNEX.REMOVE_ALL_PEERS),
+    unlockPairing: () =>
+      ipcRenderer.invoke(IPC.ANNEX.UNLOCK_PAIRING),
+    onPeersChanged: (callback: (peers: Array<{
+      fingerprint: string;
+      publicKey: string;
+      alias: string;
+      icon: string;
+      color: string;
+      pairedAt: string;
+      lastSeen: string;
+    }>) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, peers: any) => callback(peers);
+      ipcRenderer.on(IPC.ANNEX.PEERS_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.ANNEX.PEERS_CHANGED, listener); };
+    },
+    onPairingLocked: (callback: (locked: boolean) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, locked: any) => callback(locked);
+      ipcRenderer.on(IPC.ANNEX.PAIRING_LOCKED, listener);
+      return () => { ipcRenderer.removeListener(IPC.ANNEX.PAIRING_LOCKED, listener); };
+    },
+    onLockStateChanged: (callback: (state: { locked: boolean; remainingMs: number }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: any) => callback(state);
+      ipcRenderer.on(IPC.ANNEX.LOCK_STATE_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.ANNEX.LOCK_STATE_CHANGED, listener); };
+    },
+    disconnectController: (fingerprint: string) =>
+      ipcRenderer.invoke(IPC.ANNEX.DISCONNECT_CONTROLLER, fingerprint),
+    disableAndDisconnect: () =>
+      ipcRenderer.invoke(IPC.ANNEX.DISABLE_AND_DISCONNECT),
+  },
+  annexClient: {
+    getSatellites: () =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.GET_SATELLITES),
+    connect: (fingerprint: string, bearerToken?: string) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.CONNECT, fingerprint, bearerToken),
+    disconnect: (fingerprint: string) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.DISCONNECT, fingerprint),
+    retry: (fingerprint: string) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.RETRY, fingerprint),
+    scan: () =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.SCAN),
+    ptyInput: (satelliteId: string, agentId: string, data: string) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.PTY_INPUT, satelliteId, agentId, data),
+    ptyResize: (satelliteId: string, agentId: string, cols: number, rows: number) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.PTY_RESIZE, satelliteId, agentId, cols, rows),
+    agentSpawn: (satelliteId: string, params: unknown) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.AGENT_SPAWN, satelliteId, params),
+    agentKill: (satelliteId: string, agentId: string) =>
+      ipcRenderer.invoke(IPC.ANNEX_CLIENT.AGENT_KILL, satelliteId, agentId),
+    onSatellitesChanged: (callback: (satellites: unknown[]) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, sats: any) => callback(sats);
+      ipcRenderer.on(IPC.ANNEX_CLIENT.SATELLITES_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.ANNEX_CLIENT.SATELLITES_CHANGED, listener); };
+    },
+    onSatelliteEvent: (callback: (event: { satelliteId: string; type: string; payload: unknown }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: any) => callback(data);
+      ipcRenderer.on(IPC.ANNEX_CLIENT.SATELLITE_EVENT, listener);
+      return () => { ipcRenderer.removeListener(IPC.ANNEX_CLIENT.SATELLITE_EVENT, listener); };
     },
   },
   window: {
