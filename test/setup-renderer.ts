@@ -344,5 +344,7 @@ vi.stubGlobal('clubhouse', {
     sendCanvasMutation: noop,
     onCanvasMutation: () => noop,
     setTitle: asyncNoop,
+    focusPopout: asyncNoop,
+    onPopoutsChanged: () => noop,
   },
 });
