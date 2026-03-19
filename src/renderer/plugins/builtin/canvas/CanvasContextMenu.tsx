@@ -22,7 +22,6 @@ interface CanvasContextMenuProps {
 // SVG icons for built-in items — 18×18 Lucide-style to match plugin widget icons
 const AGENT_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 const BROWSER_VIEW_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
-const GIT_DIFF_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`;
 const ANCHOR_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>`;
 
 /** First-class built-in view types. File and Terminal are now provided by their
@@ -31,7 +30,6 @@ const ANCHOR_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 const BUILTIN_ITEMS: Array<{ type: CanvasViewType; label: string; icon: string }> = [
   { type: 'agent', label: 'Add Agent View', icon: AGENT_ICON },
   { type: 'browser', label: 'Add Browser View', icon: BROWSER_VIEW_ICON },
-  { type: 'git-diff', label: 'Add Git Diff View', icon: GIT_DIFF_ICON },
   { type: 'anchor', label: 'Add Anchor', icon: ANCHOR_ICON },
 ];
 
@@ -40,12 +38,14 @@ const BUILTIN_ITEMS: Array<{ type: CanvasViewType; label: string; icon: string }
 const PROMOTED_PLUGIN_TYPES = new Set([
   'plugin:files:file-viewer',
   'plugin:terminal:shell',
+  'plugin:git:git-status',
 ]);
 
 /** Deprecated built-in view types that use the legacy rendering path. */
 const LEGACY_ITEMS: Array<{ type: CanvasViewType; label: string; icon: string }> = [
   { type: 'legacy-file', label: 'Add File View (Legacy)', icon: '#' },
   { type: 'legacy-terminal', label: 'Add Terminal View (Legacy)', icon: '$' },
+  { type: 'legacy-git-diff', label: 'Add Git Diff View (Legacy)', icon: '±' },
 ];
 
 export function CanvasContextMenu({ x, y, onSelect, onDismiss }: CanvasContextMenuProps) {
