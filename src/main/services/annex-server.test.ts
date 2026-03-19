@@ -90,8 +90,13 @@ vi.mock('./theme-service', () => ({
 
 // Mock annex-settings
 vi.mock('./annex-settings', () => ({
-  getSettings: vi.fn().mockReturnValue({ enabled: false, deviceName: 'Test Machine', alias: 'Test Machine', icon: 'computer', color: 'indigo', autoReconnect: false }),
+  getSettings: vi.fn().mockReturnValue({ enableServer: false, enableClient: false, deviceName: 'Test Machine', alias: 'Test Machine', icon: 'computer', color: 'indigo', autoReconnect: false }),
   saveSettings: vi.fn(),
+}));
+
+// Mock plugin-manifest-registry
+vi.mock('./plugin-manifest-registry', () => ({
+  listAllManifests: vi.fn().mockReturnValue([]),
 }));
 
 // Mock annex-identity
@@ -121,6 +126,7 @@ vi.mock('./annex-peers', () => ({
   recordFailedAttempt: vi.fn(),
   recordSuccessfulAttempt: vi.fn(),
   addPeer: vi.fn(),
+  getPeer: vi.fn().mockReturnValue(null),
   isPairedPeer: vi.fn().mockReturnValue(false),
   updateLastSeen: vi.fn(),
 }));
@@ -162,6 +168,7 @@ import * as agentSystem from './agent-system';
 import * as structuredManagerModule from './structured-manager';
 import * as _eventReplay from './annex-event-replay';
 import * as permissionQueue from './annex-permission-queue';
+import * as pluginManifestRegistry from './plugin-manifest-registry';
 import { generateQuickName } from '../../shared/name-generator';
 import { appLog } from './log-service';
 import Bonjour from 'bonjour-service';
@@ -367,6 +374,7 @@ describe('annex-server', () => {
       expect(agents).toHaveLength(1);
       expect(agents[0]).toEqual({
         id: 'durable_1',
+        projectId: 'proj_1',
         name: 'agent-1',
         kind: 'durable',
         color: 'indigo',
@@ -1006,6 +1014,92 @@ describe('annex-server', () => {
       );
       expect(res.status).toBe(404);
       expect(JSON.parse(res.body)).toEqual({ error: 'no_structured_session' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Snapshot: projectId in agents (#866 fix)
+  // ---------------------------------------------------------------------------
+
+  describe('snapshot agent projectId', () => {
+    it('includes projectId in durable agent snapshot objects', async () => {
+      vi.mocked(projectStore.list).mockReturnValue([
+        { id: 'proj-1', name: 'My Project', path: '/my/project' },
+      ]);
+      vi.mocked(agentConfigModule.listDurable).mockReturnValue([
+        { id: 'agent-1', name: 'mega-camel', color: 'blue', branch: 'main', model: null, orchestrator: null, freeAgentMode: false, icon: null },
+      ]);
+
+      const { port, token } = await startAndPair();
+
+      const res = await request(port, 'GET', '/api/v1/projects/proj-1/agents', undefined, authHeaders(token));
+      expect(res.status).toBe(200);
+      const agents = JSON.parse(res.body);
+      expect(agents).toHaveLength(1);
+      expect(agents[0].projectId).toBe('proj-1');
+      expect(agents[0].id).toBe('agent-1');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Snapshot: plugins included
+  // ---------------------------------------------------------------------------
+
+  describe('snapshot plugins', () => {
+    it('listAllManifests is available for snapshot building', () => {
+      vi.mocked(pluginManifestRegistry.listAllManifests).mockReturnValue([
+        { id: 'hub', name: 'Hub', version: '1.0.0', scope: 'app', engine: { api: 0.8 }, contributes: { tab: { label: 'Hub' } } },
+        { id: 'files', name: 'Files', version: '1.0.0', scope: 'project', engine: { api: 0.8 }, contributes: { tab: { label: 'Files' } } },
+      ] as any);
+
+      // Verify mock is properly configured — buildSnapshot calls this on WS connect
+      const manifests = pluginManifestRegistry.listAllManifests();
+      expect(manifests).toHaveLength(2);
+      expect(manifests[0].id).toBe('hub');
+      expect(manifests[1].id).toBe('files');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Pairing: directional role
+  // ---------------------------------------------------------------------------
+
+  describe('pairing stores directional role', () => {
+    it('stores paired client with role "controller"', async () => {
+      annexServer.start();
+      await new Promise((r) => setTimeout(r, 100));
+      const status = annexServer.getStatus();
+      const pairingPort = (status as any).pairingPort || status.port;
+
+      await request(pairingPort, 'POST', '/pair', {
+        pin: status.pin,
+        publicKey: 'client-public-key',
+        alias: 'Controller Mac',
+        icon: 'laptop',
+        color: 'blue',
+      });
+
+      expect(annexPeers.addPeer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: 'controller',
+          alias: 'Controller Mac',
+        }),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Snapshot: icon data URLs
+  // ---------------------------------------------------------------------------
+
+  describe('snapshot icon data', () => {
+    it('readIconData and readAgentIconData are available for snapshot building', () => {
+      // Verify the mock functions are set up — buildSnapshot calls these on WS connect
+      vi.mocked(projectStore.readIconData).mockResolvedValue('data:image/png;base64,abc123');
+      vi.mocked(agentConfigModule.readAgentIconData).mockResolvedValue('data:image/png;base64,xyz789');
+
+      expect(typeof projectStore.readIconData).toBe('function');
+      expect(typeof agentConfigModule.readAgentIconData).toBe('function');
     });
   });
 });

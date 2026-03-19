@@ -6,11 +6,13 @@
  * to prevent collisions with local agents.
  */
 import { create } from 'zustand';
+import { usePluginStore } from '../plugins/plugin-store';
 import type {
   Project,
   Agent,
   AgentDetailedStatus,
   SatelliteSnapshot,
+  SnapshotPluginSummary,
 } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +46,11 @@ export function isRemoteAgentId(id: string): boolean {
   return id.startsWith('remote:');
 }
 
+/** Check if a project ID is a remote (namespaced) ID. */
+export function isRemoteProjectId(id: string): boolean {
+  return id.startsWith('remote:');
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -61,6 +68,12 @@ interface RemoteProjectStoreState {
   /** Plugin match results per satellite */
   pluginMatchState: Record<string, PluginMatchResult[]>;
 
+  /** Remote project icon data URLs keyed by namespaced project ID */
+  remoteProjectIcons: Record<string, string>;
+
+  /** Remote agent icon data URLs keyed by namespaced agent ID */
+  remoteAgentIcons: Record<string, string>;
+
   /** Apply a satellite snapshot to the store. */
   applySatelliteSnapshot: (satelliteId: string, satelliteName: string, snapshot: SatelliteSnapshot) => void;
 
@@ -76,9 +89,53 @@ interface RemoteProjectStoreState {
 
 export interface PluginMatchResult {
   id: string;
+  name: string;
   status: 'matched' | 'missing' | 'version_mismatch';
   localVersion?: string;
   remoteVersion?: string;
+  scope?: string;
+  contributes?: unknown;
+}
+
+/**
+ * Compare satellite plugins against locally installed plugins.
+ */
+function computePluginMatchState(remotePlugins: SnapshotPluginSummary[]): PluginMatchResult[] {
+  const localPlugins = usePluginStore.getState().plugins;
+
+  return remotePlugins.map((remote) => {
+    const local = localPlugins[remote.id];
+    if (!local) {
+      return {
+        id: remote.id,
+        name: remote.name,
+        status: 'missing' as const,
+        remoteVersion: remote.version,
+        scope: remote.scope,
+        contributes: remote.contributes,
+      };
+    }
+    if (local.manifest.version !== remote.version) {
+      return {
+        id: remote.id,
+        name: remote.name,
+        status: 'version_mismatch' as const,
+        localVersion: local.manifest.version,
+        remoteVersion: remote.version,
+        scope: remote.scope,
+        contributes: remote.contributes,
+      };
+    }
+    return {
+      id: remote.id,
+      name: remote.name,
+      status: 'matched' as const,
+      localVersion: local.manifest.version,
+      remoteVersion: remote.version,
+      scope: remote.scope,
+      contributes: remote.contributes,
+    };
+  });
 }
 
 export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) => ({
@@ -86,6 +143,8 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
   remoteAgents: {},
   remoteAgentDetailedStatus: {},
   pluginMatchState: {},
+  remoteProjectIcons: {},
+  remoteAgentIcons: {},
 
   applySatelliteSnapshot: (satelliteId, satelliteName, snapshot) => {
     // Map projects to RemoteProject
@@ -101,7 +160,7 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
     // Map agents with namespaced IDs
     const newAgents: Record<string, Agent> = {};
     const agents = snapshot.agents || {};
-    for (const [projectId, projectAgents] of Object.entries(agents)) {
+    for (const [_projectId, projectAgents] of Object.entries(agents)) {
       for (const agent of projectAgents as Agent[]) {
         const nsId = namespacedAgentId(satelliteId, agent.id);
         newAgents[nsId] = {
@@ -109,6 +168,26 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
           id: nsId,
           projectId: `remote:${satelliteId}:${agent.projectId}`,
         };
+      }
+    }
+
+    // Compute plugin match state
+    const pluginMatches = snapshot.plugins
+      ? computePluginMatchState(snapshot.plugins)
+      : [];
+
+    // Namespace icon data URLs
+    const newProjectIcons: Record<string, string> = {};
+    if (snapshot.projectIcons) {
+      for (const [projId, dataUrl] of Object.entries(snapshot.projectIcons)) {
+        newProjectIcons[`remote:${satelliteId}:${projId}`] = dataUrl;
+      }
+    }
+
+    const newAgentIcons: Record<string, string> = {};
+    if (snapshot.agentIcons) {
+      for (const [agentId, dataUrl] of Object.entries(snapshot.agentIcons)) {
+        newAgentIcons[namespacedAgentId(satelliteId, agentId)] = dataUrl;
       }
     }
 
@@ -122,6 +201,16 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
         }
       }
 
+      // Remove old icons for this satellite
+      const filteredProjectIcons = { ...state.remoteProjectIcons };
+      const filteredAgentIcons = { ...state.remoteAgentIcons };
+      for (const key of Object.keys(filteredProjectIcons)) {
+        if (key.startsWith(`remote:${satelliteId}:`)) delete filteredProjectIcons[key];
+      }
+      for (const key of Object.keys(filteredAgentIcons)) {
+        if (key.startsWith(`remote:${satelliteId}:`)) delete filteredAgentIcons[key];
+      }
+
       return {
         satelliteProjects: {
           ...state.satelliteProjects,
@@ -130,6 +219,18 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
         remoteAgents: {
           ...filteredAgents,
           ...newAgents,
+        },
+        pluginMatchState: {
+          ...state.pluginMatchState,
+          [satelliteId]: pluginMatches,
+        },
+        remoteProjectIcons: {
+          ...filteredProjectIcons,
+          ...newProjectIcons,
+        },
+        remoteAgentIcons: {
+          ...filteredAgentIcons,
+          ...newAgentIcons,
         },
       };
     });
@@ -142,6 +243,8 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
 
       const newAgents = { ...state.remoteAgents };
       const newStatuses = { ...state.remoteAgentDetailedStatus };
+      const newProjectIcons = { ...state.remoteProjectIcons };
+      const newAgentIcons = { ...state.remoteAgentIcons };
       for (const key of Object.keys(newAgents)) {
         if (key.startsWith(`remote:${satelliteId}:`)) {
           delete newAgents[key];
@@ -149,10 +252,23 @@ export const useRemoteProjectStore = create<RemoteProjectStoreState>((set, get) 
         }
       }
 
+      const newPluginMatch = { ...state.pluginMatchState };
+      delete newPluginMatch[satelliteId];
+
+      for (const key of Object.keys(newProjectIcons)) {
+        if (key.startsWith(`remote:${satelliteId}:`)) delete newProjectIcons[key];
+      }
+      for (const key of Object.keys(newAgentIcons)) {
+        if (key.startsWith(`remote:${satelliteId}:`)) delete newAgentIcons[key];
+      }
+
       return {
         satelliteProjects: newProjects,
         remoteAgents: newAgents,
         remoteAgentDetailedStatus: newStatuses,
+        pluginMatchState: newPluginMatch,
+        remoteProjectIcons: newProjectIcons,
+        remoteAgentIcons: newAgentIcons,
       };
     });
   },

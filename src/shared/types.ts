@@ -447,7 +447,12 @@ export interface ExperimentalSettings {
 // --- Annex (LAN monitoring) types ---
 
 export interface AnnexSettings {
-  enabled: boolean;
+  /** @deprecated Use enableServer/enableClient instead. Kept for backward compat migration. */
+  enabled?: boolean;
+  /** Allow remote control of this machine (run annex server + mDNS advertisement) */
+  enableServer: boolean;
+  /** Connect to and control satellites (run annex client + Bonjour discovery) */
+  enableClient: boolean;
   deviceName: string;
   /** Display alias for this instance (defaults to os.hostname()) */
   alias: string;
@@ -476,6 +481,9 @@ export interface AnnexStatus {
 
 // ── Annex peer types ──────────────────────────────────────────────────
 
+/** Role of a peer relative to this machine. */
+export type AnnexPeerRole = 'controller' | 'satellite';
+
 export interface AnnexPeer {
   /** SHA-256 fingerprint of the peer's public key */
   fingerprint: string;
@@ -491,6 +499,13 @@ export interface AnnexPeer {
   pairedAt: string;
   /** ISO timestamp of last successful connection */
   lastSeen: string;
+  /**
+   * The role of this peer relative to us:
+   * - 'controller': This peer controls us (we are their satellite)
+   * - 'satellite': This peer is our satellite (we control them)
+   * Legacy peers without a role are treated as 'satellite' for backward compat.
+   */
+  role?: AnnexPeerRole;
 }
 
 // ── Annex client (controller) types ───────────────────────────────────
@@ -511,6 +526,15 @@ export interface SatelliteConnection {
   lastError: string | null;
 }
 
+/** Summary of an installed plugin sent in the satellite snapshot. */
+export interface SnapshotPluginSummary {
+  id: string;
+  name: string;
+  version: string;
+  scope: 'project' | 'app' | 'dual';
+  contributes?: unknown;
+}
+
 export interface SatelliteSnapshot {
   projects: Project[];
   agents: Record<string, Agent[]>;
@@ -519,9 +543,13 @@ export interface SatelliteSnapshot {
   orchestrators: unknown;
   pendingPermissions: unknown[];
   lastSeq: number;
-  plugins?: unknown[];
+  plugins?: SnapshotPluginSummary[];
   agentsMeta?: unknown;
   protocolVersion?: number;
+  /** Project icon data URLs keyed by project ID. */
+  projectIcons?: Record<string, string>;
+  /** Agent icon data URLs keyed by agent ID. */
+  agentIcons?: Record<string, string>;
 }
 
 // --- Auto-update types ---

@@ -16,6 +16,7 @@ import * as themeService from './theme-service';
 import * as eventReplay from './annex-event-replay';
 import * as permissionQueue from './annex-permission-queue';
 import * as structuredManager from './structured-manager';
+import * as pluginManifestRegistry from './plugin-manifest-registry';
 import { spawnAgent, getAvailableOrchestrators, isHeadlessAgent } from './agent-system';
 import { appLog } from './log-service';
 import { broadcastToAllWindows } from '../util/ipc-broadcast';
@@ -263,13 +264,14 @@ function getOrchestratorsMap(): Record<string, { displayName: string; shortName:
 // Agent mapping (Issue 1 — defaults + runtime status)
 // ---------------------------------------------------------------------------
 
-function mapDurableAgent(d: Awaited<ReturnType<typeof agentConfig.listDurable>>[number]) {
+function mapDurableAgent(d: Awaited<ReturnType<typeof agentConfig.listDurable>>[number], projectId: string) {
   const agentId = d.id;
   const isRunning = ptyManager.isRunning(agentId) || isHeadlessAgent(agentId) || structuredManager.isStructuredSession(agentId);
   const status = isRunning ? 'running' : 'sleeping';
 
   return {
     id: d.id,
+    projectId,
     name: d.name,
     kind: 'durable' as const,
     color: d.color,
@@ -293,9 +295,31 @@ async function buildSnapshot(): Promise<object> {
   const agents: Record<string, unknown[]> = {};
   const quickAgents: Record<string, unknown[]> = {};
 
+  // Resolve project icon data URLs for remote display
+  const projectIcons: Record<string, string> = {};
+  for (const proj of projects) {
+    if (proj.icon) {
+      const dataUrl = await projectStore.readIconData(proj.icon);
+      if (dataUrl) projectIcons[proj.id] = dataUrl;
+    }
+  }
+
+  // Resolve agent icon data URLs
+  const agentIcons: Record<string, string> = {};
+
   for (const proj of projects) {
     const durables = await agentConfig.listDurable(proj.path);
-    agents[proj.id] = durables.map(mapDurableAgent);
+    const mapped = durables.map((d) => mapDurableAgent(d, proj.id));
+
+    // Resolve agent icon data URLs
+    for (const d of durables) {
+      if (d.icon) {
+        const dataUrl = await agentConfig.readAgentIconData(d.icon);
+        if (dataUrl) agentIcons[d.id] = dataUrl;
+      }
+    }
+
+    agents[proj.id] = mapped;
     quickAgents[proj.id] = [];
   }
 
@@ -323,6 +347,15 @@ async function buildSnapshot(): Promise<object> {
     }
   }
 
+  // Collect installed plugin summaries for remote plugin matching
+  const plugins = pluginManifestRegistry.listAllManifests().map((m) => ({
+    id: m.id,
+    name: m.name,
+    version: m.version,
+    scope: m.scope,
+    contributes: m.contributes,
+  }));
+
   return {
     protocolVersion: 2,
     projects,
@@ -333,6 +366,9 @@ async function buildSnapshot(): Promise<object> {
     orchestrators: getOrchestratorsMap(),
     pendingPermissions: permissionQueue.listPending(),
     lastSeq: eventReplay.getLastSeq(),
+    plugins,
+    projectIcons,
+    agentIcons,
   };
 }
 
@@ -827,6 +863,7 @@ async function handlePairingRequest(req: http.IncomingMessage, res: http.ServerR
           color: (body.color as string) || 'indigo',
           pairedAt: new Date().toISOString(),
           lastSeen: new Date().toISOString(),
+          role: 'controller', // This peer initiated pairing → they control us
         });
       }
 
@@ -909,7 +946,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
     const durables = await agentConfig.listDurable(project.path);
-    sendJson(res, 200, durables.map(mapDurableAgent));
+    sendJson(res, 200, durables.map((d) => mapDurableAgent(d, projectId)));
     return;
   }
 
@@ -1220,10 +1257,14 @@ export function start(): void {
     let peerFingerprintForWs: string | undefined;
     if (tlsServer && socket instanceof tls.TLSSocket) {
       const peerFingerprint = annexTls.extractPeerFingerprint(socket);
-      if (peerFingerprint && annexPeers.isPairedPeer(peerFingerprint)) {
-        authType = 'mtls';
-        peerFingerprintForWs = peerFingerprint;
-        annexPeers.updateLastSeen(peerFingerprint);
+      if (peerFingerprint) {
+        const peer = annexPeers.getPeer(peerFingerprint);
+        // Only grant mTLS auth to peers with role 'controller' (or legacy peers without a role)
+        if (peer && (peer.role === 'controller' || !peer.role)) {
+          authType = 'mtls';
+          peerFingerprintForWs = peerFingerprint;
+          annexPeers.updateLastSeen(peerFingerprint);
+        }
       }
     }
 
