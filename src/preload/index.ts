@@ -1022,6 +1022,29 @@ const api = {
       return () => { ipcRenderer.removeListener(IPC.WINDOW.POPOUTS_CHANGED, listener); };
     },
   },
+
+  mcpBinding: {
+    getBindings: () =>
+      ipcRenderer.invoke(IPC.MCP_BINDING.GET_BINDINGS),
+    bind: (agentId: string, target: { targetId: string; targetKind: string; label: string }) =>
+      ipcRenderer.invoke(IPC.MCP_BINDING.BIND, agentId, target),
+    unbind: (agentId: string, targetId: string) =>
+      ipcRenderer.invoke(IPC.MCP_BINDING.UNBIND, agentId, targetId),
+    registerWebview: (widgetId: string, webContentsId: string) =>
+      ipcRenderer.invoke(IPC.MCP_BINDING.REGISTER_WEBVIEW, widgetId, webContentsId),
+    unregisterWebview: (widgetId: string) =>
+      ipcRenderer.invoke(IPC.MCP_BINDING.UNREGISTER_WEBVIEW, widgetId),
+    onBindingsChanged: (callback: (bindings: Array<{
+      agentId: string;
+      targetId: string;
+      targetKind: 'browser' | 'agent' | 'terminal';
+      label: string;
+    }>) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, bindings: any) => callback(bindings);
+      ipcRenderer.on(IPC.MCP_BINDING.BINDINGS_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.MCP_BINDING.BINDINGS_CHANGED, listener); };
+    },
+  },
 };
 
 export type ClubhouseAPI = typeof api;
