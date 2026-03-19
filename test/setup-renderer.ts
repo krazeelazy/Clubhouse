@@ -174,6 +174,7 @@ vi.stubGlobal('clubhouse', {
     readBinary: async () => '',
     write: asyncNoop,
     showInFolder: asyncNoop,
+    openInEditor: asyncNoop,
     mkdir: asyncNoop,
     delete: asyncNoop,
     rename: asyncNoop,
