@@ -8,13 +8,16 @@
 import React, { useMemo } from 'react';
 import type { CanvasView, AgentCanvasView as AgentCanvasViewType, PluginCanvasView as PluginCanvasViewType } from './canvas-types';
 import type { McpBindingEntry } from '../../../stores/mcpBindingStore';
-import { computeWirePath, viewRect } from './wire-utils';
+import { computeWirePath, bezierPathWithOffsets, viewRect } from './wire-utils';
+import type { EdgeMidpoint } from './wire-utils';
+import { WireFlowDots } from './WireFlowDots';
+import { useWirePhysics } from './useWirePhysics';
 
 /** CSS animation for ambient wire glow */
 const WIRE_GLOW_KEYFRAMES = `
 @keyframes wire-pulse {
-  0%, 100% { filter: drop-shadow(0 0 3px rgba(137, 180, 250, 0.4)); }
-  50% { filter: drop-shadow(0 0 6px rgba(137, 180, 250, 0.7)); }
+  0%, 100% { filter: drop-shadow(0 0 3px rgb(var(--ctp-accent, 137 180 250) / 0.4)); }
+  50% { filter: drop-shadow(0 0 6px rgb(var(--ctp-accent, 137 180 250) / 0.7)); }
 }
 `;
 
@@ -85,6 +88,10 @@ export const WireOverlay = React.memo(function WireOverlay({
     const result: Array<{
       key: string;
       path: string;
+      from: EdgeMidpoint;
+      to: EdgeMidpoint;
+      fromViewId: string;
+      toViewId: string;
       binding: McpBindingEntry;
       bidir: boolean;
     }> = [];
@@ -108,11 +115,15 @@ export const WireOverlay = React.memo(function WireOverlay({
 
       const srcRect = viewRect(srcPos, source.size);
       const tgtRect = viewRect(tgtPos, target.size);
-      const { path } = computeWirePath(srcRect, tgtRect);
+      const { path, from, to } = computeWirePath(srcRect, tgtRect);
 
       result.push({
         key: `${binding.agentId}--${binding.targetId}`,
         path,
+        from,
+        to,
+        fromViewId: source.id,
+        toViewId: target.id,
         binding,
         bidir,
       });
@@ -120,6 +131,20 @@ export const WireOverlay = React.memo(function WireOverlay({
 
     return result;
   }, [bindings, viewMap, viewPositions]);
+
+  // Build wire specs for physics hook
+  const wireSpecs = useMemo(
+    () => wires.map((w) => ({
+      key: w.key,
+      fromEdge: w.from.edge,
+      toEdge: w.to.edge,
+      fromViewId: w.fromViewId,
+      toViewId: w.toViewId,
+    })),
+    [wires],
+  );
+
+  const wireOffsets = useWirePhysics(wireSpecs, viewPositions, wires.length > 0);
 
   if (wires.length === 0) return null;
 
@@ -140,7 +165,7 @@ export const WireOverlay = React.memo(function WireOverlay({
           orient="auto"
           markerUnits="userSpaceOnUse"
         >
-          <path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="var(--ctp-blue, #89b4fa)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="rgb(var(--ctp-accent, 137 180 250))" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </marker>
         {/* Reverse arrowhead (at source end, for bidirectional) */}
         <marker
@@ -152,38 +177,54 @@ export const WireOverlay = React.memo(function WireOverlay({
           orient="auto"
           markerUnits="userSpaceOnUse"
         >
-          <path d="M 7 1 L 1 4 L 7 7" fill="none" stroke="var(--ctp-blue, #89b4fa)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M 7 1 L 1 4 L 7 7" fill="none" stroke="rgb(var(--ctp-accent, 137 180 250))" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </marker>
+        {/* Wire path definitions (referenced by flow dots via <mpath>) */}
+        {wires.map(({ key, path, from, to }) => {
+          const offsets = wireOffsets.get(key);
+          const defPath = offsets
+            ? bezierPathWithOffsets(from, to, { dx: offsets.fromDx, dy: offsets.fromDy }, { dx: offsets.toDx, dy: offsets.toDy })
+            : path;
+          return <path key={`def-${key}`} id={`wire-path-${key}`} d={defPath} fill="none" />;
+        })}
       </defs>
-      {wires.map(({ key, path, binding, bidir }) => (
-        <g key={key} data-testid={`wire-group-${key}`} data-bidir={bidir ? 'true' : undefined}>
-          {/* Invisible thick hitbox for click interaction */}
-          <path
-            d={path}
-            fill="none"
-            stroke="transparent"
-            strokeWidth={8}
-            style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-            onClick={(e) => onWireClick?.(binding, e)}
-            data-testid={`wire-hitbox-${key}`}
-          />
-          {/* Visible styled wire */}
-          <path
-            d={path}
-            fill="none"
-            stroke="var(--ctp-blue, #89b4fa)"
-            strokeWidth={2}
-            strokeLinecap="round"
-            markerEnd="url(#wire-arrow-fwd)"
-            markerStart={bidir ? 'url(#wire-arrow-rev)' : undefined}
-            style={{
-              pointerEvents: 'none',
-              animation: 'wire-pulse 3s ease-in-out infinite',
-            }}
-            data-testid={`wire-path-${key}`}
-          />
-        </g>
-      ))}
+      {wires.map(({ key, path, from, to, binding, bidir }) => {
+        const offsets = wireOffsets.get(key);
+        const physicsPath = offsets
+          ? bezierPathWithOffsets(from, to, { dx: offsets.fromDx, dy: offsets.fromDy }, { dx: offsets.toDx, dy: offsets.toDy })
+          : path;
+        return (
+          <g key={key} data-testid={`wire-group-${key}`} data-bidir={bidir ? 'true' : undefined}>
+            {/* Invisible thick hitbox for click interaction */}
+            <path
+              d={physicsPath}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={8}
+              style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+              onClick={(e) => onWireClick?.(binding, e)}
+              data-testid={`wire-hitbox-${key}`}
+            />
+            {/* Visible styled wire */}
+            <path
+              d={physicsPath}
+              fill="none"
+              stroke="rgb(var(--ctp-accent, 137 180 250))"
+              strokeWidth={2}
+              strokeLinecap="round"
+              markerEnd="url(#wire-arrow-fwd)"
+              markerStart={bidir ? 'url(#wire-arrow-rev)' : undefined}
+              style={{
+                pointerEvents: 'none',
+                animation: 'wire-pulse 3s ease-in-out infinite',
+              }}
+              data-testid={`wire-path-${key}`}
+            />
+            {/* Flowing light dots */}
+            <WireFlowDots wireKey={key} bidir={bidir} />
+          </g>
+        );
+      })}
     </svg>
   );
 });
