@@ -17,6 +17,7 @@ import * as eventReplay from './annex-event-replay';
 import * as permissionQueue from './annex-permission-queue';
 import * as structuredManager from './structured-manager';
 import * as pluginManifestRegistry from './plugin-manifest-registry';
+import * as fileService from './file-service';
 import { spawnAgent, getAvailableOrchestrators, isHeadlessAgent } from './agent-system';
 import { appLog } from './log-service';
 import { broadcastToAllWindows } from '../util/ipc-broadcast';
@@ -969,6 +970,78 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // --- File system endpoints (plugin remote file access) ---
+
+  // GET /api/v1/projects/:id/files/tree?path=<relative>&depth=<n>&includeHidden=<bool>
+  const fileTreeMatch = url.match(/^\/api\/v1\/projects\/([^/]+)\/files\/tree(\?.*)?$/);
+  if (method === 'GET' && fileTreeMatch) {
+    const projectId = decodeURIComponent(fileTreeMatch[1]);
+    const project = await findProjectById(projectId);
+    if (!project) {
+      sendJson(res, 404, { error: 'project_not_found' });
+      return;
+    }
+    const params = new URLSearchParams(fileTreeMatch[2]?.slice(1) || '');
+    const relPath = params.get('path') || '.';
+    const depth = parseInt(params.get('depth') || '2', 10);
+    const includeHidden = params.get('includeHidden') === 'true';
+
+    // Resolve and validate path stays within project
+    const fullPath = relPath === '.' ? project.path : `${project.path}/${relPath}`;
+    if (!fullPath.startsWith(project.path)) {
+      sendJson(res, 403, { error: 'path_traversal' });
+      return;
+    }
+
+    try {
+      const tree = await fileService.readTree(fullPath, { depth, includeHidden });
+      sendJson(res, 200, tree);
+    } catch (err) {
+      sendJson(res, 500, { error: err instanceof Error ? err.message : 'read_tree_failed' });
+    }
+    return;
+  }
+
+  // GET /api/v1/projects/:id/files/read?path=<relative>
+  const fileReadMatch = url.match(/^\/api\/v1\/projects\/([^/]+)\/files\/read(\?.*)?$/);
+  if (method === 'GET' && fileReadMatch) {
+    const projectId = decodeURIComponent(fileReadMatch[1]);
+    const project = await findProjectById(projectId);
+    if (!project) {
+      sendJson(res, 404, { error: 'project_not_found' });
+      return;
+    }
+    const params = new URLSearchParams(fileReadMatch[2]?.slice(1) || '');
+    const relPath = params.get('path');
+    if (!relPath) {
+      sendJson(res, 400, { error: 'path_required' });
+      return;
+    }
+
+    const fullPath = relPath.startsWith('/') ? relPath : `${project.path}/${relPath}`;
+    if (!fullPath.startsWith(project.path)) {
+      sendJson(res, 403, { error: 'path_traversal' });
+      return;
+    }
+
+    try {
+      const content = await fileService.readFile(fullPath);
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Length': Buffer.byteLength(content),
+      });
+      res.end(content);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        sendJson(res, 404, { error: 'file_not_found' });
+      } else {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'read_failed' });
+      }
+    }
+    return;
+  }
+
   // --- Icon endpoints (Issue 2) ---
   if (method === 'GET' && await handleIconRequest(res, url)) {
     return;
@@ -1080,7 +1153,7 @@ function handleWsMessage(ws: WebSocket, data: string): void {
   const authType = wsAuthTypes.get(ws);
   const isMtls = authType === 'mtls';
 
-  if (!isMtls && (type === 'pty:input' || type === 'pty:resize' || type === 'agent:spawn' || type === 'agent:wake' || type === 'agent:kill')) {
+  if (!isMtls && (type === 'pty:input' || type === 'pty:resize' || type === 'pty:spawn-shell' || type === 'agent:spawn' || type === 'agent:wake' || type === 'agent:kill')) {
     ws.send(JSON.stringify({ type: 'error', payload: { message: 'Control messages require mTLS authentication' } }));
     return;
   }
@@ -1106,6 +1179,25 @@ function handleWsMessage(ws: WebSocket, data: string): void {
       const rows = payload.rows as number;
       if (!agentId || typeof cols !== 'number' || typeof rows !== 'number') break;
       ptyManager.resize(agentId, cols, rows);
+      break;
+    }
+
+    case 'pty:spawn-shell': {
+      const sessionId = payload.sessionId as string;
+      const projectId = payload.projectId as string;
+      if (!sessionId || !projectId) break;
+      findProjectById(projectId).then((project) => {
+        if (!project) {
+          ws.send(JSON.stringify({ type: 'error', payload: { message: 'project_not_found' } }));
+          return;
+        }
+        try {
+          ptyManager.spawnShell(sessionId, project.path);
+          ws.send(JSON.stringify({ type: 'pty:spawn-shell:ack', payload: { sessionId } }));
+        } catch (err) {
+          ws.send(JSON.stringify({ type: 'error', payload: { message: err instanceof Error ? err.message : 'spawn_failed' } }));
+        }
+      });
       break;
     }
 

@@ -122,4 +122,31 @@ export function registerAnnexClientHandlers(): void {
   ipcMain.handle(IPC.ANNEX_CLIENT.FORGET_ALL_SATELLITES, () => {
     annexClient.forgetAllSatellites();
   });
+
+  // File system proxy: read file tree from satellite
+  ipcMain.handle(IPC.ANNEX_CLIENT.FILE_TREE, withValidatedArgs(
+    [stringArg(), stringArg(), objectArg({ optional: true })],
+    async (_event, satelliteId, projectId, options) => {
+      return annexClient.requestFileTree(satelliteId, projectId, options);
+    },
+  ));
+
+  // File system proxy: read file content from satellite
+  ipcMain.handle(IPC.ANNEX_CLIENT.FILE_READ, withValidatedArgs(
+    [stringArg(), stringArg(), stringArg()],
+    async (_event, satelliteId, projectId, path) => {
+      return annexClient.requestFileRead(satelliteId, projectId, path);
+    },
+  ));
+
+  // PTY proxy: spawn a shell on a satellite
+  ipcMain.handle(IPC.ANNEX_CLIENT.PTY_SPAWN_SHELL, withValidatedArgs(
+    [stringArg(), stringArg(), stringArg()],
+    (_event, satelliteId, sessionId, projectId) => {
+      return annexClient.sendToSatellite(satelliteId, {
+        type: 'pty:spawn-shell',
+        payload: { sessionId, projectId },
+      });
+    },
+  ));
 }
