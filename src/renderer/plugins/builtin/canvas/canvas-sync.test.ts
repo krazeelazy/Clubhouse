@@ -105,7 +105,7 @@ describe('canvas-sync', () => {
       const initialZIndex = store.getState().views[0].zIndex;
 
       // Add another view
-      store.getState().addView('file', { x: 300, y: 300 });
+      store.getState().addView('agent', { x: 300, y: 300 });
 
       applyCanvasMutation(store, canvasId, { type: 'focusView', viewId });
 
@@ -118,7 +118,7 @@ describe('canvas-sync', () => {
       const canvasId = store.getState().activeCanvasId;
       const mutation: CanvasMutation = {
         type: 'addView',
-        viewType: 'file',
+        viewType: 'agent',
         position: { x: 200, y: 200 },
       };
 
@@ -141,7 +141,7 @@ describe('canvas-sync', () => {
       // Apply mutation to the second canvas
       const mutation: CanvasMutation = {
         type: 'addView',
-        viewType: 'browser',
+        viewType: 'anchor',
         position: { x: 50, y: 50 },
       };
       applyCanvasMutation(store, secondCanvasId, mutation);
@@ -152,7 +152,7 @@ describe('canvas-sync', () => {
       // The view should be on the second canvas
       const secondCanvas = store.getState().canvases.find((c) => c.id === secondCanvasId);
       expect(secondCanvas?.views).toHaveLength(1);
-      expect(secondCanvas?.views[0].type).toBe('browser');
+      expect(secondCanvas?.views[0].type).toBe('anchor');
     });
   });
 
