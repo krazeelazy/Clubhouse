@@ -644,6 +644,28 @@ const api = {
       ipcRenderer.invoke(IPC.APP.GET_UPDATE_STATUS),
     applyUpdate: () =>
       ipcRenderer.invoke(IPC.APP.APPLY_UPDATE),
+    getLiveAgentsForUpdate: () =>
+      ipcRenderer.invoke(IPC.APP.GET_LIVE_AGENTS_FOR_UPDATE),
+    getPendingResumes: () =>
+      ipcRenderer.invoke(IPC.APP.GET_PENDING_RESUMES),
+    resumeManualAgent: (agentId: string, projectPath: string, sessionId?: string) =>
+      ipcRenderer.invoke(IPC.APP.RESUME_MANUAL_AGENT, agentId, projectPath, sessionId),
+    resolveWorkingAgent: (agentId: string, action: string) =>
+      ipcRenderer.invoke(IPC.APP.RESOLVE_WORKING_AGENT, agentId, action),
+    confirmUpdateRestart: (data: { agentNames: Record<string, string>; agentMeta?: Record<string, unknown> }) =>
+      ipcRenderer.invoke(IPC.APP.CONFIRM_UPDATE_RESTART, data),
+    devSimulateUpdateRestart: (data: { agentNames: Record<string, string>; agentMeta?: Record<string, unknown> }) =>
+      ipcRenderer.invoke(IPC.APP.DEV_SIMULATE_UPDATE_RESTART, data),
+    onDevSimulateUpdateRestart: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(IPC.APP.DEV_SIMULATE_UPDATE_RESTART, listener);
+      return () => { ipcRenderer.removeListener(IPC.APP.DEV_SIMULATE_UPDATE_RESTART, listener); };
+    },
+    onResumeStatusUpdate: (callback: (data: unknown) => void) => {
+      const listener = (_event: unknown, data: unknown) => callback(data);
+      ipcRenderer.on(IPC.APP.RESUME_STATUS_UPDATE, listener);
+      return () => { ipcRenderer.removeListener(IPC.APP.RESUME_STATUS_UPDATE, listener); };
+    },
     getPendingReleaseNotes: () =>
       ipcRenderer.invoke(IPC.APP.GET_PENDING_RELEASE_NOTES),
     clearPendingReleaseNotes: () =>
