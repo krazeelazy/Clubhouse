@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerToolTemplate, getScopedToolList, callTool, buildToolName, buildToolKey, parseToolName, sanitizeId, shortHash, _resetForTesting } from './tool-registry';
 import { bindingManager } from './binding-manager';
+import { agentRegistry } from '../agent-registry';
 import type { McpBinding } from './types';
 
 function makeBinding(overrides: Partial<McpBinding> & { agentId: string; targetId: string; targetKind: McpBinding['targetKind'] }): McpBinding {
@@ -11,6 +12,10 @@ describe('ToolRegistry', () => {
   beforeEach(() => {
     _resetForTesting();
     bindingManager._resetForTesting();
+    // Clean up any registrations from previous tests
+    agentRegistry.untrack('agent-2');
+    agentRegistry.untrack('agent-3');
+    agentRegistry.untrack('agent.2');
   });
 
   describe('shortHash', () => {
@@ -178,6 +183,7 @@ describe('ToolRegistry', () => {
         inputSchema: { type: 'object' },
       }, vi.fn());
 
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', {
         targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2',
         targetName: 'scrappy-robin', projectName: 'myapp',
@@ -198,6 +204,7 @@ describe('ToolRegistry', () => {
       registerToolTemplate('browser', 'navigate', { description: 'Nav', inputSchema: { type: 'object' } }, vi.fn());
 
       // Bind to agent only
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', { targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2' });
 
       const tools = getScopedToolList('agent-1');
@@ -209,6 +216,8 @@ describe('ToolRegistry', () => {
     it('generates tools for multiple bindings', () => {
       registerToolTemplate('agent', 'send_message', { description: 'Send', inputSchema: { type: 'object' } }, vi.fn());
 
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
+      agentRegistry.register('agent-3', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', { targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2' });
       bindingManager.bind('agent-1', { targetId: 'agent-3', targetKind: 'agent', label: 'Agent 3' });
 
@@ -228,6 +237,7 @@ describe('ToolRegistry', () => {
         inputSchema: { type: 'object' },
       }, vi.fn());
 
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', {
         targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2',
       });
@@ -249,6 +259,7 @@ describe('ToolRegistry', () => {
         inputSchema: { type: 'object' },
       }, vi.fn());
 
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', {
         targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2',
       });
@@ -273,6 +284,7 @@ describe('ToolRegistry', () => {
         inputSchema: { type: 'object' },
       }, vi.fn());
 
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
       bindingManager.bind('agent-1', {
         targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2',
       });
@@ -425,6 +437,45 @@ describe('ToolRegistry', () => {
       const result = await callTool('agent-1', 'browser__widget_1__navigate', { url: 'http://test' });
       expect(result.isError).toBeFalsy();
       expect(handler).toHaveBeenCalledWith('widget-1', 'agent-1', { url: 'http://test' });
+    });
+  });
+
+  describe('sleeping target tool filtering', () => {
+    beforeEach(() => {
+      // Register multiple agent tools
+      registerToolTemplate('agent', 'send_message', { description: 'Send', inputSchema: { type: 'object' } }, vi.fn());
+      registerToolTemplate('agent', 'get_status', { description: 'Status', inputSchema: { type: 'object' } }, vi.fn());
+      registerToolTemplate('agent', 'wake', { description: 'Wake', inputSchema: { type: 'object' } }, vi.fn());
+      registerToolTemplate('agent', 'read_output', { description: 'Read', inputSchema: { type: 'object' } }, vi.fn());
+
+      bindingManager.bind('agent-1', {
+        targetId: 'agent-2', targetKind: 'agent', label: 'Agent 2',
+        targetName: 'robin', projectName: 'app',
+      });
+    });
+
+    it('only exposes get_status and wake when target agent is sleeping (not in registry)', () => {
+      // agent-2 is NOT in agentRegistry → sleeping
+      const tools = getScopedToolList('agent-1');
+      const suffixes = tools.map(t => t.name.split('__').pop());
+      expect(suffixes).toEqual(['get_status', 'wake']);
+    });
+
+    it('exposes all tools when target agent is running (in registry)', () => {
+      agentRegistry.register('agent-2', { runtime: 'pty', projectPath: '/test', orchestrator: 'claude-code' });
+      const tools = getScopedToolList('agent-1');
+      const suffixes = tools.map(t => t.name.split('__').pop());
+      expect(suffixes).toEqual(['send_message', 'get_status', 'wake', 'read_output']);
+      agentRegistry.untrack('agent-2');
+    });
+
+    it('does not filter non-agent target tools', () => {
+      registerToolTemplate('browser', 'navigate', { description: 'Nav', inputSchema: { type: 'object' } }, vi.fn());
+      bindingManager.bind('agent-1', { targetId: 'widget-1', targetKind: 'browser', label: 'Browser' });
+      // Browser target not in registry — should still get all browser tools
+      const tools = getScopedToolList('agent-1');
+      const browserTools = tools.filter(t => t.name.startsWith('browser__'));
+      expect(browserTools).toHaveLength(1);
     });
   });
 });
