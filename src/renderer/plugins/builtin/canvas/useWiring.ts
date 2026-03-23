@@ -45,9 +45,11 @@ function targetKind(view: CanvasView): 'agent' | 'browser' | 'group-project' | '
   return 'browser';
 }
 
-function hitTestViews(canvasPos: Position, views: CanvasView[]): CanvasView | null {
-  // Check in reverse z-order (highest z-index first)
+export function hitTestViews(canvasPos: Position, views: CanvasView[]): CanvasView | null {
+  // Check in reverse z-order (highest z-index first), but prioritize non-zone
+  // views over zones so users can wire to individual agents inside zones.
   const sorted = [...views].sort((a, b) => b.zIndex - a.zIndex);
+  let fallbackZone: CanvasView | null = null;
   for (const v of sorted) {
     if (
       canvasPos.x >= v.position.x &&
@@ -55,10 +57,14 @@ function hitTestViews(canvasPos: Position, views: CanvasView[]): CanvasView | nu
       canvasPos.y >= v.position.y &&
       canvasPos.y <= v.position.y + v.size.height
     ) {
+      if (v.type === 'zone') {
+        if (!fallbackZone) fallbackZone = v;
+        continue;
+      }
       return v;
     }
   }
-  return null;
+  return fallbackZone;
 }
 
 export interface ZoneWireCallback {
