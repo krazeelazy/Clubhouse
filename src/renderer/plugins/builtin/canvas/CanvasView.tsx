@@ -377,6 +377,15 @@ export function CanvasViewComponent({
 
   const handleUpdateMetadata = useCallback((updates: CanvasWidgetMetadata) => {
     const mergedMetadata = { ...view.metadata, ...updates };
+
+    // Store last canvas position for restore on unpin
+    (mergedMetadata as any).__lastCanvasPosition = {
+      x: view.position.x,
+      y: view.position.y,
+      width: view.size.width,
+      height: view.size.height
+    };
+
     const viewUpdates: Partial<CanvasView> = { metadata: mergedMetadata };
 
     // Regenerate displayName from the plugin's callback so the title bar
@@ -389,7 +398,7 @@ export function CanvasViewComponent({
     }
 
     onUpdate(viewUpdates);
-  }, [view.metadata, view.type, onUpdate]);
+  }, [view.metadata, view.type, view.position, view.size, onUpdate]);
 
   const renderContent = () => {
     switch (view.type) {
@@ -450,7 +459,7 @@ export function CanvasViewComponent({
         return (
           <Component
             widgetId={view.id}
-            api={api}
+            api={registered.pluginApi ?? api}
             metadata={view.metadata}
             onUpdateMetadata={handleUpdateMetadata}
             size={currentSize}
@@ -611,6 +620,12 @@ export function CanvasViewComponent({
     );
   }
 
+  // Hide canvas widget if it's pinned to the nav bar
+  const isPinned = !!(view.metadata as CanvasWidgetMetadata).__pinnedToControls;
+  if (isPinned) {
+    return null;
+  }
+
   return (
     <div
       className={`absolute flex flex-col bg-ctp-base border border-surface-2 rounded-lg ${attentionClass}`}
@@ -761,6 +776,31 @@ export function CanvasViewComponent({
               </svg>
             )}
           </button>
+          {/* Pin to controls bar button (plugin widgets with pinnableToControls: true) */}
+          {view.type === 'plugin' && (() => {
+            const pluginView = view as PluginCanvasViewType;
+            const registered = getRegisteredWidgetType(pluginView.pluginWidgetType);
+            if (!registered?.declaration.pinnableToControls) return null;
+            const isPinned = !!(view.metadata as CanvasWidgetMetadata).__pinnedToControls;
+            return (
+              <button
+                className={`w-5 h-5 flex items-center justify-center rounded transition-colors ${
+                  isPinned
+                    ? 'text-ctp-blue bg-surface-1'
+                    : 'text-ctp-overlay0 hover:bg-surface-1 hover:text-ctp-text'
+                }`}
+                onClick={(e) => { e.stopPropagation(); handleUpdateMetadata({ __pinnedToControls: !isPinned }); }}
+                title={isPinned ? 'Unpin from toolbar' : 'Pin to toolbar'}
+                data-testid="canvas-view-pin"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <circle cx="12" cy="5" r="3" />
+                  <rect x="11" y="8" width="2" height="8" />
+                  <polygon points="12 16 8 20 16 20" />
+                </svg>
+              </button>
+            );
+          })()}
           <button
             className="w-5 h-5 flex items-center justify-center rounded text-ctp-overlay0 hover:bg-ctp-error/20 hover:text-ctp-error transition-colors"
             onClick={(e) => { e.stopPropagation(); onClose(); }}

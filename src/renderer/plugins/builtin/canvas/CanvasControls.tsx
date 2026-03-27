@@ -1,5 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
-import type { CanvasView, CanvasViewAttention } from './canvas-types';
+import type { CanvasView, CanvasViewAttention, PluginCanvasView } from './canvas-types';
+import type { CanvasWidgetMetadata, PluginAPI } from '../../../../shared/plugin-types';
+import type { RegisteredCanvasWidget } from '../../canvas-widget-registry';
 import { CanvasSearch } from './CanvasSearch';
 import { useAttentionCycler } from './canvas-attention';
 
@@ -54,9 +56,15 @@ interface CanvasControlsProps {
   onSizeToFit: () => void;
   onSelectView: (viewId: string) => void;
   attentionMap?: Map<string, CanvasViewAttention>;
+  api?: PluginAPI;
+  pinnedWidgets?: Array<{
+    view: PluginCanvasView;
+    registered: RegisteredCanvasWidget;
+    onUpdateMetadata: (updates: CanvasWidgetMetadata) => void;
+  }>;
 }
 
-export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZoomReset, onCenter, onSizeToFit, onSelectView, attentionMap }: CanvasControlsProps) {
+export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZoomReset, onCenter, onSizeToFit, onSelectView, attentionMap, api, pinnedWidgets }: CanvasControlsProps) {
   const zoomPercent = Math.round(zoom * 100);
   const effectiveMap = attentionMap ?? new Map();
   const { count, goNext, goPrev } = useAttentionCycler(effectiveMap, onSelectView);
