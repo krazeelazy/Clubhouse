@@ -17,11 +17,12 @@ export interface SpawnOpts {
   sessionId?: string;
   agentId?: string;
   freeAgentMode?: boolean;
+  /** Permission mode for autonomous execution: 'auto' uses Claude's auto-approve classifier, 'skip-all' bypasses all permissions */
+  permissionMode?: 'auto' | 'skip-all';
 }
 
 export interface HeadlessOpts extends SpawnOpts {
   outputFormat?: string;
-  permissionMode?: string;
   noSessionPersistence?: boolean;
   disallowedTools?: string[];
 }
@@ -222,6 +223,8 @@ export interface StructuredSessionOpts {
   allowedTools?: string[];
   disallowedTools?: string[];
   freeAgentMode?: boolean;
+  /** Permission mode for autonomous execution: 'auto' uses Claude's auto-approve classifier, 'skip-all' bypasses all permissions */
+  permissionMode?: 'auto' | 'skip-all';
   /** Shell command prefix prepended before the CLI binary */
   commandPrefix?: string;
 }
