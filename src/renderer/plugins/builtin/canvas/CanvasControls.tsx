@@ -70,6 +70,7 @@ interface CanvasControlsProps {
   onSizeToFit: () => void;
   onSelectView: (viewId: string) => void;
   onAutoLayout?: (settings: ForceLayoutSettings) => void;
+  onElkLayout?: () => void;
   attentionMap?: Map<string, CanvasViewAttention>;
   api?: PluginAPI;
   pinnedWidgets?: Array<{
@@ -79,13 +80,14 @@ interface CanvasControlsProps {
   }>;
 }
 
-export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZoomReset, onCenter, onSizeToFit, onSelectView, onAutoLayout, attentionMap, api: _api, pinnedWidgets: _pinnedWidgets }: CanvasControlsProps) {
+export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZoomReset, onCenter, onSizeToFit, onSelectView, onAutoLayout, onElkLayout, attentionMap, api: _api, pinnedWidgets: _pinnedWidgets }: CanvasControlsProps) {
   const zoomPercent = Math.round(zoom * 100);
   const effectiveMap = attentionMap ?? new Map();
   const { count, goNext, goPrev } = useAttentionCycler(effectiveMap, onSelectView);
   const { count: anchorCount, goNext: anchorNext, goPrev: anchorPrev } = useAnchorCycler(views, onSelectView);
   const [showLayoutSettings, setShowLayoutSettings] = useState(false);
   const [forceSettings, setForceSettings] = useState<ForceLayoutSettings>(DEFAULT_FORCE_SETTINGS);
+  const [layoutMode, setLayoutMode] = useState<'force' | 'elk'>('force');
 
   const btnClass = 'w-6 h-6 flex items-center justify-center rounded text-ctp-subtext0 hover:bg-surface-1 hover:text-ctp-text transition-colors';
 
@@ -227,20 +229,18 @@ export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZ
       {hasViews && onAutoLayout && (
         <div className="relative flex items-center gap-0.5">
           <button
-            onClick={() => onAutoLayout(forceSettings)}
+            onClick={() => layoutMode === 'elk' && onElkLayout ? onElkLayout() : onAutoLayout(forceSettings)}
             className={btnClass}
-            title="Auto Layout (force-directed)"
+            title={layoutMode === 'elk' ? 'Auto Layout (ELK layered)' : 'Auto Layout (force-directed)'}
             data-testid="canvas-auto-layout"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="6" cy="6" r="2" />
-              <circle cx="18" cy="6" r="2" />
-              <circle cx="6" cy="18" r="2" />
-              <circle cx="18" cy="18" r="2" />
-              <line x1="8" y1="6" x2="16" y2="6" />
-              <line x1="6" y1="8" x2="6" y2="16" />
-              <line x1="18" y1="8" x2="18" y2="16" />
-              <line x1="8" y1="18" x2="16" y2="18" />
+              {/* Flow graph: left node branching to two right nodes */}
+              <rect x="2" y="9" width="6" height="6" rx="1" />
+              <rect x="16" y="3" width="6" height="6" rx="1" />
+              <rect x="16" y="15" width="6" height="6" rx="1" />
+              <path d="M 8 12 L 12 12 L 12 6 L 16 6" />
+              <path d="M 12 12 L 12 18 L 16 18" />
             </svg>
           </button>
           <button
@@ -258,7 +258,23 @@ export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZ
               className="absolute top-full right-0 mt-1 w-56 bg-ctp-mantle border border-surface-0 rounded-lg shadow-lg p-3 z-50"
               data-testid="canvas-auto-layout-settings"
             >
-              <div className="text-[10px] font-semibold text-ctp-subtext0 uppercase tracking-wider mb-2">Layout Settings</div>
+              <div className="text-[10px] font-semibold text-ctp-subtext0 uppercase tracking-wider mb-2">Layout Mode</div>
+              <div className="flex gap-1 mb-3" data-testid="layout-mode-toggle">
+                <button
+                  onClick={() => setLayoutMode('force')}
+                  className={`flex-1 text-[10px] py-1 rounded transition-colors ${layoutMode === 'force' ? 'bg-ctp-accent text-ctp-crust font-semibold' : 'bg-surface-0 text-ctp-subtext0 hover:text-ctp-text'}`}
+                >
+                  Force
+                </button>
+                <button
+                  onClick={() => setLayoutMode('elk')}
+                  className={`flex-1 text-[10px] py-1 rounded transition-colors ${layoutMode === 'elk' ? 'bg-ctp-accent text-ctp-crust font-semibold' : 'bg-surface-0 text-ctp-subtext0 hover:text-ctp-text'}`}
+                >
+                  ELK
+                </button>
+              </div>
+              {layoutMode === 'force' && <>
+              <div className="text-[10px] font-semibold text-ctp-subtext0 uppercase tracking-wider mb-2">Force Settings</div>
               <label className="flex items-center justify-between text-[11px] text-ctp-text mb-1.5">
                 <span>Center Force</span>
                 <input
@@ -306,6 +322,7 @@ export function CanvasControls({ zoom, hasViews, views, onZoomIn, onZoomOut, onZ
               >
                 Reset to defaults
               </button>
+              </>}
             </div>
           )}
         </div>

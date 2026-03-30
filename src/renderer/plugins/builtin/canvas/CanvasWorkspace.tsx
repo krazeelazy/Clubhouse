@@ -596,6 +596,90 @@ export function CanvasWorkspace({
     requestAnimationFrame(animateStep);
   }, [views, wireDefinitions, onMoveViews]);
 
+  // ── ELK Layout (async, layered with spline wire routing) ──────────
+
+  const handleElkLayout = useCallback(async () => {
+    if (views.length === 0) return;
+
+    // Build zones
+    const zoneViews = views.filter(v => v.type === 'zone') as ZoneCanvasView[];
+    const elkZones = zoneViews.map(z => ({
+      id: z.id,
+      width: z.size.width,
+      height: z.size.height,
+      childIds: z.containedViewIds || [],
+    }));
+
+    // Build cards (non-zone views only — zones are compound containers, not nodes)
+    const nonZoneViews = views.filter(v => v.type !== 'zone');
+    const cardIdSet = new Set(nonZoneViews.map(v => v.id));
+    const elkCards = nonZoneViews.map(v => {
+      const zoneId = zoneViews.find(z => (z.containedViewIds || []).includes(v.id))?.id;
+      return { id: v.id, width: v.size.width, height: v.size.height, zoneId };
+    });
+
+    // Build edges from wire definitions — map wire index to edge id for post-layout lookup
+    const edgeIndexToWire: Array<{ agentId: string; targetId: string }> = [];
+    const elkEdges: Array<{ id: string; source: string; target: string }> = [];
+    for (let i = 0; i < wireDefinitions.length; i++) {
+      const wire = wireDefinitions[i];
+      const sourceView = nonZoneViews.find(v => (v as any).agentId === wire.agentId || v.id === wire.agentId);
+      const targetView = nonZoneViews.find(v => (v as any).agentId === wire.targetId || v.id === wire.targetId);
+      // Only include edges where both endpoints exist as card nodes (not zones)
+      if (sourceView && targetView && cardIdSet.has(sourceView.id) && cardIdSet.has(targetView.id)) {
+        const edgeId = `e${elkEdges.length}`;
+        elkEdges.push({ id: edgeId, source: sourceView.id, target: targetView.id });
+        edgeIndexToWire.push({ agentId: wire.agentId, targetId: wire.targetId });
+      }
+    }
+
+    try {
+      const result = await window.clubhouse.canvas.layoutElk({ cards: elkCards, edges: elkEdges, zones: elkZones });
+
+      // Animate to ELK positions
+      const targetMap = new Map(result.nodes.map(n => [n.id, { x: n.x, y: n.y }]));
+      const startPositions = new Map(nonZoneViews.map(v => [v.id, { ...v.position }]));
+      const duration = 500;
+      const startTime = performance.now();
+      // Snapshot wire mapping — safe to use after async animation completes
+      const wireMap = [...edgeIndexToWire];
+
+      function animateStep(now: number) {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const ease = 1 - Math.pow(1 - t, 3);
+
+        const positions = new Map<string, Position>();
+        for (const [id, start] of startPositions) {
+          const target = targetMap.get(id);
+          if (!target) continue;
+          positions.set(id, {
+            x: Math.round(start.x + (target.x - start.x) * ease),
+            y: Math.round(start.y + (target.y - start.y) * ease),
+          });
+        }
+        onMoveViews(positions);
+
+        if (t < 1) {
+          requestAnimationFrame(animateStep);
+        } else {
+          // After animation, store routed paths on wire definitions
+          for (const edge of result.edges) {
+            const idx = parseInt(edge.id.slice(1));
+            const wire = wireMap[idx];
+            if (wire) {
+              onUpdateWireDefinition(wire.agentId, wire.targetId, { routedPath: edge.path });
+            }
+          }
+        }
+      }
+
+      requestAnimationFrame(animateStep);
+    } catch (err) {
+      console.error('[ELK] layout failed:', err);
+    }
+  }, [views, wireDefinitions, onMoveViews, onUpdateWireDefinition]);
+
   // ── Search → focus on view ────────────────────────────────────────
 
   const handleSearchSelect = useCallback((viewId: string) => {
@@ -1173,6 +1257,7 @@ export function CanvasWorkspace({
               onCenter={handleCenter}
               onSizeToFit={handleSizeToFit}
               onAutoLayout={handleAutoLayout}
+              onElkLayout={handleElkLayout}
               hasViews={views.length > 0}
               views={views}
               onSelectView={handleSearchSelect}
