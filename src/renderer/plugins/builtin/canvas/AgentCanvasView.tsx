@@ -118,9 +118,28 @@ export function AgentCanvasView({ view, api, onUpdate, zoneThemeId }: AgentCanva
     }
   }, [activeProjectForCreate, api.agents, handlePickAgent]);
 
-  // Agent assigned but not yet available in the store (e.g. remote agent
-  // whose status hasn't synced yet) — show a pending state instead of the
-  // picker so the card doesn't flash the "assign agent" UI.
+  // Agent assigned but not yet available in the store (e.g. sleeping durable
+  // agent created by the assistant, or remote agent that hasn't synced yet).
+  // Trigger loadDurableAgents so the store picks up the agent and subsequent
+  // renders can show SleepingAgent or AgentTerminal properly.
+  const [agentFetchTriggered, setAgentFetchTriggered] = useState(false);
+  useEffect(() => {
+    if (!view.agentId || assignedAgent || agentFetchTriggered) return;
+    setAgentFetchTriggered(true);
+    const projectId = view.projectId || (view.metadata as any)?.projectId;
+    if (projectId) {
+      const project = api.projects.list().find((p) => p.id === projectId);
+      if (project) {
+        // Trigger the agent store to reload durables for this project.
+        // This adds sleeping agents that may have been created since
+        // the last load (e.g. by the assistant via create_agent MCP tool).
+        import('../../../stores/agentStore').then(({ useAgentStore }) => {
+          useAgentStore.getState().loadDurableAgents(project.id, project.path);
+        }).catch(() => { /* ignore — dynamic import failure */ });
+      }
+    }
+  }, [view.agentId, assignedAgent, agentFetchTriggered, view.projectId, view.metadata, api.projects]);
+
   if (view.agentId && !assignedAgent) {
     const name = view.displayName || view.title || view.agentId;
     return (
