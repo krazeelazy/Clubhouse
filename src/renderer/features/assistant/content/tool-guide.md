@@ -50,8 +50,8 @@ Agents may have custom icons set by the user (shown as a non-null `icon` field i
 | `remove_card` | Remove a card from canvas. |
 | `rename_card` | Change card display name. |
 | `connect_cards` | Create MCP wire. Source must be agent card with agent_id. Wires persist even if agent sleeps. |
+| `disconnect_cards` | Remove a wire. Auto-removes bidirectional wires. |
 | `layout_canvas` | Auto-arrange: "horizontal", "vertical", "grid", "hub_spoke", "auto". ALWAYS call after adding all cards. |
-| `get_card_defaults` | Get default card sizes, spacing values, and layout info. |
 
 ### Card types and dimensions
 
@@ -59,7 +59,7 @@ Agents may have custom icons set by the user (shown as a non-null `icon` field i
 |-----------|-------------|---------|
 | **Agent** | 300x200 | Durable agents. ALWAYS set agent_id + project_id. |
 | **Zone** | 600x400 | Visual containers that group other cards. |
-| **Anchor** | 200x100 | Text-only labels. CANNOT be wired or used for coordination. |
+| **Anchor** | 200x100 | Text-only labels. CANNOT be wired. See `list_card_types` for all. |
 
 **Spacing:** 340px+ horizontal, 260px+ vertical between cards.
 
