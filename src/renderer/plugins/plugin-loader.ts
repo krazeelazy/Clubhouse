@@ -120,6 +120,16 @@ export async function initializePluginSystem(): Promise<void> {
     }
     store.setExternalPluginsEnabled(externalEnabled);
 
+    // Read persisted showBetaPlugins flag from marketplace settings
+    let betaPluginsEnabled = false;
+    try {
+      const marketplaceSettings = await window.clubhouse.marketplace.getMarketplaceSettings();
+      betaPluginsEnabled = marketplaceSettings?.showBetaPlugins === true;
+    } catch {
+      // Default to disabled
+    }
+    store.setShowBetaPlugins(betaPluginsEnabled);
+
     // Discover community plugins (only when external plugins are enabled)
     if (externalEnabled) {
       try {
