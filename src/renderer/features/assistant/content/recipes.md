@@ -53,6 +53,10 @@ When a user asks about agent types:
 - **Quick agents** are ephemeral — they run a single task and clean up. Use for one-off questions, code reviews, or small fixes.
 - Suggest durable agents for project work, quick agents for ad-hoc tasks.
 
+## Plugin install
+
+`list_marketplace_plugins` → `download_marketplace_plugin` → `open_plugin_settings`
+
 ## Multi-agent debugging
 
 When a user has multiple services and struggles with cross-service issues:

@@ -129,6 +129,19 @@ Do NOT create "coordination hub" anchors — they have no functionality.
 **Agent reconfiguration:**
 `list_agents` → `update_agent` → `write_agent_instructions`
 
+**Plugin install:**
+`list_marketplace_plugins` → `download_marketplace_plugin` → `open_plugin_settings`
+
+## Marketplace tools
+
+| Tool | Use when |
+|------|----------|
+| `list_marketplace_plugins` | User asks about plugins or has a need one could solve. Filterable. |
+| `download_marketplace_plugin` | Install a plugin. Downloads only — user enables in Settings > Plugins. |
+| `open_plugin_settings` | After downloading or to manage plugins. Opens plugin settings |
+
+Suggest plugins when user needs match plugin capabilities
+
 ## Before destructive operations
 
 Always:

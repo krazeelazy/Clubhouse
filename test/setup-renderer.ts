@@ -448,6 +448,7 @@ vi.stubGlobal('clubhouse', {
     getPopoutParams: () => null,
     focusMain: asyncNoop,
     onNavigateToAgent: () => noop,
+    onNavigateToPluginSettings: () => noop,
     getAgentState: async () => ({ agents: {}, agentDetailedStatus: {}, agentIcons: {} }),
     onRequestAgentState: () => noop,
     respondAgentState: noop,
